@@ -18,7 +18,7 @@
 :root{
   color-scheme:dark;
   --bg:#000000; --card:#141414; --ink:#FFFFFF; --mute:#9A9A9A; --line:#262626;
-  --acc:#C9B3FF; --on-acc:#1A0F33; --acc-soft:#2A2140; --in:#5FD38D; --out:#F08A6A; --warn:#F2C14E;
+  --acc:#C9B3FF; --on-acc:#1A0F33; --acc-soft:#2A2140; --in:#4ADE80; --out:#FF5C5C; --in-on-acc:#0B6B35; --out-on-acc:#B3261E; --warn:#F2C14E;
   --r:18px; --nav:68px;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -69,7 +69,7 @@ main{padding:4px 16px 0;max-width:640px;margin:0 auto}
 .item .mid b{display:block;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .item .mid small{color:var(--mute);font-size:12px}
 .amt{font-weight:700;white-space:nowrap}
-.amt.in{color:var(--in)}.amt.out{color:var(--ink)}
+.amt.in{color:var(--in)}.amt.out{color:var(--out)}
 .filters{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:6px;scrollbar-width:none}
 .filters::-webkit-scrollbar{display:none}
 .fchip{border:1px solid var(--line);background:var(--card);border-radius:99px;padding:7px 13px;font-size:13px;font-weight:600;white-space:nowrap}
@@ -378,19 +378,19 @@ function vInicio() {
     <div class="lbl">Disponible en ${mOnly(M)}</div>
     <div class="big">${money(st.disp)}</div>
     <div class="grid">
-      <div>Ingresos<b>${money(st.ing)}</b></div>
-      <div>Gastos del día a día<b>${money(st.direct)}</b></div>
-      <div>Tarjetas (cuotas del mes)<b>${money(st.cards)}</b></div>
+      <div>Ingresos<b style="color:var(--in-on-acc)">${money(st.ing)}</b></div>
+      <div>Gastos del día a día<b style="color:var(--out-on-acc)">${money(st.direct)}</b></div>
+      <div>Tarjetas (cuotas del mes)<b style="color:var(--out-on-acc)">${money(st.cards)}</b></div>
       <div>Ahorrado<b>${money(st.ahorro)}</b></div>
     </div>${cmp}
   </div>
   ${alerts.join("")}
   ${!hasData ? `<div class="card"><h3>¡Arranquemos!</h3><div class="note">Tocá el <b>+</b> para cargar tu primer gasto o ingreso. Si usás tarjetas, agregalas en la pestaña <b>Tarjetas</b> con su fecha de cierre y vencimiento, así las cuotas caen en el mes correcto.</div></div>` : ""}
   <div class="card"><h3>Por medio de pago</h3><div class="tiles">
-    <div class="tile"><span>💵 Efectivo</span><b>${money(st.byMethod.efectivo)}</b></div>
-    <div class="tile"><span>🏦 Débito / transf.</span><b>${money(st.byMethod.debito)}</b></div>
-    <div class="tile"><span>📱 Mercado Pago</span><b>${money(st.byMethod.mp)}</b></div>
-    <div class="tile"><span>💳 Tarjetas</span><b>${money(st.byMethod.tarjetas)}</b></div>
+    <div class="tile"><span>💵 Efectivo</span><b style="color:var(--out)">${money(st.byMethod.efectivo)}</b></div>
+    <div class="tile"><span>🏦 Débito / transf.</span><b style="color:var(--out)">${money(st.byMethod.debito)}</b></div>
+    <div class="tile"><span>📱 Mercado Pago</span><b style="color:var(--out)">${money(st.byMethod.mp)}</b></div>
+    <div class="tile"><span>💳 Tarjetas</span><b style="color:var(--out)">${money(st.byMethod.tarjetas)}</b></div>
   </div></div>
   <div class="card"><h3>En qué se fue la plata <button class="link" data-act="budgets">Presupuestos</button></h3>${catBars(st.byCat, true)}</div>
   <div class="card"><h3>Ahorros <button class="link" data-tab="sav">Ver todo</button></h3><div class="tiles">
@@ -413,7 +413,7 @@ function vMovs() {
   let html = `<div class="filters">${chip("type", "all", "Todos")}${chip("type", "gasto", "Gastos")}${chip("type", "ingreso", "Ingresos")}<span style="width:6px;flex:none"></span>${chip("method", "all", "Todo medio")}${chip("method", "efectivo", "Efectivo")}${chip("method", "debito", "Débito")}${chip("method", "mp", "Mercado Pago")}${chip("method", "card", "Tarjetas")}</div>
   <input class="search" id="q" placeholder="Buscar por nota o categoría" value="${esc(f.q)}">`;
   const tIn = items.filter(i => i.type === "ingreso").reduce((t, i) => t + i.amount, 0), tOut = items.filter(i => i.type === "gasto").reduce((t, i) => t + i.amount, 0);
-  html += `<div class="tiles" style="margin-bottom:4px"><div class="tile" style="background:var(--card);border:1px solid var(--line)"><span>Entró</span><b style="color:var(--in)">${money(tIn)}</b></div><div class="tile" style="background:var(--card);border:1px solid var(--line)"><span>Salió (total de compras)</span><b>${money(tOut)}</b></div></div>`;
+  html += `<div class="tiles" style="margin-bottom:4px"><div class="tile" style="background:var(--card);border:1px solid var(--line)"><span>Entró</span><b style="color:var(--in)">${money(tIn)}</b></div><div class="tile" style="background:var(--card);border:1px solid var(--line)"><span>Salió (total de compras)</span><b style="color:var(--out)">${money(tOut)}</b></div></div>`;
   if (!items.length) return html + `<div class="empty">No hay movimientos en ${mName(S.month)}${f.type !== "all" || f.method !== "all" || f.q ? " con estos filtros" : ""}.</div>`;
   let day = "";
   html += `<div class="list">`;
