@@ -104,6 +104,19 @@ main{padding:4px 16px 0;max-width:640px;margin:0 auto}
 .goal small{color:var(--mute);font-size:12px;display:block;margin-top:5px}
 .menu button{display:flex;align-items:center;gap:12px;width:100%;border:0;background:none;padding:13px 2px;border-top:1px solid var(--line);text-align:left;font-weight:600}
 .menu button:first-child{border-top:0}
+.hrow{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:8px}
+.hrow.cur{border-color:var(--acc)}
+.hrow .ht{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:8px}
+.hrow .ht b{font-size:15px;text-transform:capitalize}
+.hrow .ht span{font-size:12px;color:var(--mute)}
+.hrow .hg{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:11px;color:var(--mute)}
+.hrow .hg b{display:block;font-size:14px;color:var(--ink)}
+.hbar{height:6px;border-radius:99px;background:var(--line);margin-top:10px;overflow:hidden;display:flex}
+.hbar i{display:block;height:100%}
+.hyear{display:flex;justify-content:space-between;align-items:baseline;margin:16px 2px 8px;font-weight:800;font-size:16px}
+.hyear small{font-weight:600;font-size:12px;color:var(--mute)}
+.back{border:0;background:none;color:var(--acc);font-weight:700;padding:4px 0 10px;font-size:14px}
+#mLabel{cursor:pointer}
 .menu button span:last-child{margin-left:auto;color:var(--mute);font-weight:500;font-size:13px}
 .fix{display:flex;align-items:center;gap:10px;padding:11px 0;border-top:1px solid var(--line)}
 .fix:first-of-type{border-top:0}
@@ -346,9 +359,9 @@ function pendingFixed(ym) {
 /* ---------- render ---------- */
 function render() {
   $("#mLabel").textContent = mName(S.month);
-  document.querySelectorAll("nav.tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === S.tab));
+  document.querySelectorAll("nav.tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === (S.tab === "hist" ? "mas" : S.tab)));
   if (!S.ready) return;
-  const v = {inicio: vInicio, movs: vMovs, cards: vCards, sav: vSav, mas: vMas}[S.tab]();
+  const v = {inicio: vInicio, movs: vMovs, cards: vCards, sav: vSav, mas: vMas, hist: vHist}[S.tab]();
   $("#view").innerHTML = v;
   const q = $("#q"); if (q) { q.oninput = () => { S.filter.q = q.value; const pos = q.selectionStart; render(); const n = $("#q"); n.focus(); n.setSelectionRange(pos, pos); }; }
 }
@@ -467,6 +480,42 @@ function vSav() {
   }
   return html;
 }
+function histMonths() {
+  const yms = [];
+  for (const [k, v] of Object.entries(S.months)) if (v && v.length) yms.push(k);
+  for (const x of S.sav) yms.push(ymOf(x.date));
+  const now = ymOf(todayStr());
+  if (!yms.length) return [];
+  let min = yms.reduce((a, b) => a < b ? a : b), max = yms.reduce((a, b) => a > b ? a : b);
+  if (now > max) max = now;
+  const out = [];
+  for (let m = max; m >= min; m = addM(m, -1)) { const st = stats(m); if (st.ing || st.gastos || st.ahorro) out.push({ym: m, st}); }
+  return out;
+}
+function vHist() {
+  const list = histMonths();
+  let html = `<button class="back" data-act="tab" data-v="mas">‹ Volver</button><div class="card"><h3>Historial de meses</h3><div class="note">Tocá un mes para verlo en detalle.</div></div>`;
+  if (!list.length) return html + `<div class="empty">Todavía no hay meses con movimientos.</div>`;
+  const prom = list.reduce((t, x) => t + x.st.gastos, 0) / list.length;
+  html += `<div class="tiles" style="margin-bottom:4px"><div class="tile" style="background:var(--card);border:1px solid var(--line)"><span>Meses registrados</span><b>${list.length}</b></div><div class="tile" style="background:var(--card);border:1px solid var(--line)"><span>Gasto promedio</span><b style="color:var(--out)">${money(prom)}</b></div></div>`;
+  let year = "";
+  for (const {ym, st} of list) {
+    const y = ym.slice(0, 4);
+    if (y !== year) {
+      year = y; const yl = list.filter(x => x.ym.startsWith(y));
+      const yi = yl.reduce((t, x) => t + x.st.ing, 0), yg = yl.reduce((t, x) => t + x.st.gastos, 0);
+      html += `<div class="hyear">${y}<small><span style="color:var(--in)">+${money(yi)}</span> · <span style="color:var(--out)">−${money(yg).replace("−", "")}</span></small></div>`;
+    }
+    const tot = Math.max(st.ing, st.gastos + st.ahorro, 1);
+    const pg = Math.min(100, st.gastos / tot * 100), pa = Math.min(100 - pg, st.ahorro / tot * 100);
+    html += `<button class="hrow${ym === S.month ? " cur" : ""}" data-act="goMonth" data-id="${ym}">
+      <div class="ht"><b>${mOnly(ym)}</b><span>${ym === ymOf(todayStr()) ? "Mes actual" : ""}</span></div>
+      <div class="hg"><div>Ingresos<b style="color:var(--in)">${money(st.ing)}</b></div><div>Gastos<b style="color:var(--out)">${money(st.gastos)}</b></div><div>Te quedó<b style="color:${st.disp < 0 ? "var(--out)" : "var(--ink)"}">${money(st.disp)}</b></div></div>
+      <div class="hbar"><i style="width:${pg}%;background:var(--out)"></i><i style="width:${pa}%;background:var(--acc)"></i></div>
+    </button>`;
+  }
+  return html;
+}
 function vMas() {
   const M = S.month, items = S.months[M] || [];
   let fx = `<div class="card" id="fixedCard"><h3>Gastos fijos de ${mOnly(M)} <button class="link" data-act="newFixed">+ Agregar</button></h3>`;
@@ -477,6 +526,7 @@ function vMas() {
   }
   fx += `</div>`;
   return fx + `<div class="card menu">
+    <button data-act="tab" data-v="hist"><span>🗓️</span><span>Historial de meses</span><span></span></button>
     <button data-act="budgets"><span>📊</span><span>Presupuestos por categoría</span><span>${Object.values(S.cfg.budgets).filter(v => v > 0).length} activos</span></button>
     <button data-act="cats"><span>🏷️</span><span>Categorías</span><span>${S.cfg.cats.length}</span></button>
     <button data-act="usd"><span>💲</span><span>Cotización del dólar</span><span>${S.cfg.usd ? money(S.cfg.usd) : "Sin cargar"}</span></button>
@@ -763,11 +813,14 @@ document.addEventListener("click", e => {
     case "doBackup": doBackup(); break;
     case "restore": $("#restoreFile").click(); break;
     case "close": closeSheet(); break;
+    case "tab": S.tab = el.dataset.v; window.scrollTo(0, 0); render(); break;
+    case "goMonth": S.month = id; S.tab = "inicio"; window.scrollTo(0, 0); render(); break;
   }
 });
 $("#fab").onclick = () => movForm();
 $("#sheetBg").onclick = closeSheet;
 $("#prevM").onclick = () => { S.month = addM(S.month, -1); render(); };
+$("#mLabel").onclick = () => { S.tab = "hist"; window.scrollTo(0, 0); render(); };
 $("#nextM").onclick = () => { S.month = addM(S.month, 1); render(); };
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeSheet(); });
 
