@@ -154,7 +154,13 @@ nav.tabs button.on{color:var(--acc)}
 .fld{display:block;margin-top:12px}
 .fld>span{display:block;font-size:12px;font-weight:700;color:var(--mute);margin-bottom:5px;text-transform:uppercase;letter-spacing:.4px}
 .fld input,.fld select{width:100%;border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:12px;font-size:15px;outline:0}
-.fld input:focus,.fld select:focus{border-color:var(--acc)}
+.fld input:focus,.fld select:focus,.fld textarea:focus{border-color:var(--acc)}
+.fld textarea{width:100%;border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:12px;font-size:15px;outline:0;font:inherit;color:inherit;resize:vertical;min-height:70px}
+.chk{display:flex;align-items:center;gap:10px;margin-top:14px;font-weight:600}
+.chk input{width:20px;height:20px;accent-color:var(--acc)}
+.debt .mid small{display:block}
+.debt.paid{opacity:.55}
+.debt.paid .amt{text-decoration:line-through}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .hint{font-size:13px;color:var(--acc);font-weight:600;margin-top:8px}
 .note{font-size:13px;color:var(--mute);line-height:1.5}
@@ -230,7 +236,7 @@ const DEF_CATS = [
 const CARD_COLORS = ["#1F3A5F","#6B2D5C","#2F5D50","#8A4B1E","#3D3A8C","#5A5A5A","#A23B3B"];
 const ACC_TYPES = {efectivo:"Efectivo",mp:"Mercado Pago",banco:"Cuenta bancaria",pf:"Plazo fijo",fci:"FCI / inversión",otro:"Otro"};
 const BASE_METHODS = [{id:"efectivo",n:"Efectivo",i:"💵"},{id:"debito",n:"Débito / transf.",i:"🏦"},{id:"mp",n:"Mercado Pago",i:"📱"}];
-const defCfg = () => ({cats: DEF_CATS.map(c => ({...c})), cards: [], accounts: [], goals: [], budgets: {}, fixed: [], usd: 0});
+const defCfg = () => ({cats: DEF_CATS.map(c => ({...c})), cards: [], accounts: [], goals: [], budgets: {}, fixed: [], usd: 0, debts: []});
 
 /* ---------- estado ---------- */
 const S = { cfg: defCfg(), months: {}, sav: [], month: ymOf(todayStr()), tab: "inicio", ready: false, mode: "db", filter: {type: "all", method: "all", q: ""} };
@@ -359,9 +365,9 @@ function pendingFixed(ym) {
 /* ---------- render ---------- */
 function render() {
   $("#mLabel").textContent = mName(S.month);
-  document.querySelectorAll("nav.tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === (S.tab === "hist" ? "mas" : S.tab)));
+  document.querySelectorAll("nav.tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === (S.tab === "hist" || S.tab === "deudas" ? "mas" : S.tab)));
   if (!S.ready) return;
-  const v = {inicio: vInicio, movs: vMovs, cards: vCards, sav: vSav, mas: vMas, hist: vHist}[S.tab]();
+  const v = {inicio: vInicio, movs: vMovs, cards: vCards, sav: vSav, mas: vMas, hist: vHist, deudas: vDeudas}[S.tab]();
   $("#view").innerHTML = v;
   const q = $("#q"); if (q) { q.oninput = () => { S.filter.q = q.value; const pos = q.selectionStart; render(); const n = $("#q"); n.focus(); n.setSelectionRange(pos, pos); }; }
 }
@@ -516,6 +522,38 @@ function vHist() {
   }
   return html;
 }
+const fmtDate = d => { if (!d) return ""; const [y, m, dd] = d.split("-"); return dd + "/" + m + "/" + y; };
+function debtRow(d) {
+  return `<button class="item debt${d.paid ? " paid" : ""}" data-act="editDebt" data-id="${esc(d.id)}"><div class="ico">${d.paid ? "✅" : "🧾"}</div><div class="mid"><b>${esc(d.who)}</b><small>${d.date ? fmtDate(d.date) : "Sin fecha"}${d.note ? " · " + esc(d.note) : ""}</small></div><div class="amt" style="color:${d.paid ? "var(--mute)" : "var(--out)"}">${money(d.amount)}</div></button>`;
+}
+function vDeudas() {
+  const all = S.cfg.debts || [], pend = all.filter(d => !d.paid).sort((a, b) => (a.date || "9") < (b.date || "9") ? -1 : 1), paid = all.filter(d => d.paid).sort((a, b) => (b.date || "") < (a.date || "") ? -1 : 1);
+  const tot = pend.reduce((t, d) => t + d.amount, 0);
+  let html = `<button class="back" data-act="tab" data-v="mas">‹ Volver</button>`;
+  html += `<div class="card"><h3>Deudas <button class="link" data-act="newDebt">+ Agregar</button></h3>
+    <div class="tiles"><div class="tile"><span>Total que debés</span><b style="color:var(--out)">${money(tot)}</b></div><div class="tile"><span>Pendientes</span><b>${pend.length}</b></div></div></div>`;
+  if (!all.length) return html + `<div class="empty">Todavía no cargaste deudas. Tocá "+ Agregar" para anotar a quién le debés.</div>`;
+  html += pend.length ? pend.map(debtRow).join("") : `<div class="empty">No tenés deudas pendientes 🎉</div>`;
+  if (paid.length) html += `<div class="hyear" style="font-size:14px">Pagadas<small>${paid.length}</small></div>` + paid.map(debtRow).join("");
+  return html;
+}
+function debtForm(d) {
+  const isNew = !d; d = d || {who: "", amount: "", date: todayStr(), note: "", paid: false};
+  openSheet(`<h2>${isNew ? "Nueva deuda" : "Editar deuda"}</h2><form id="f">
+    <label class="fld"><span>Importe</span><input name="amount" inputmode="decimal" value="${d.amount ? numIn(d.amount) : ""}" placeholder="0" required></label>
+    <label class="fld"><span>A quién le debés</span><input name="who" value="${esc(d.who)}" placeholder="Ej: Mamá, Juli, el banco" maxlength="40" required></label>
+    <label class="fld"><span>Fecha</span><input type="date" name="date" value="${esc(d.date || "")}"></label>
+    <label class="fld"><span>Comentarios (opcional)</span><textarea name="note" maxlength="200" placeholder="Ej: me prestó para el alquiler, le devuelvo en 2 cuotas">${esc(d.note || "")}</textarea></label>
+    ${isNew ? "" : `<label class="chk"><input type="checkbox" name="paid" ${d.paid ? "checked" : ""}> Ya la pagué</label>`}
+    <button class="btn primary">Guardar</button>${isNew ? "" : `<button type="button" class="btn danger" id="delBtn">Eliminar deuda</button>`}</form>`);
+  const f = $("#f");
+  f.onsubmit = e => { e.preventDefault(); const amt = parseAmt(val(f, "amount")); if (!(amt > 0)) { toast("Poné un monto válido"); return; }
+    const who = val(f, "who").trim(); if (!who) { toast("Poné a quién le debés"); return; }
+    const nd = {id: d.id || gid(), who, amount: amt, date: val(f, "date"), note: val(f, "note").trim(), paid: !isNew && f.elements.paid.checked};
+    const list = S.cfg.debts || [];
+    S.cfg.debts = isNew ? [...list, nd] : list.map(x => x.id === nd.id ? nd : x); persist("config"); closeSheet(); toast("Deuda guardada"); render(); };
+  if (!isNew) twoTap($("#delBtn"), () => { S.cfg.debts = (S.cfg.debts || []).filter(x => x.id !== d.id); persist("config"); closeSheet(); render(); });
+}
 function vMas() {
   const M = S.month, items = S.months[M] || [];
   let fx = `<div class="card" id="fixedCard"><h3>Gastos fijos de ${mOnly(M)} <button class="link" data-act="newFixed">+ Agregar</button></h3>`;
@@ -526,6 +564,7 @@ function vMas() {
   }
   fx += `</div>`;
   return fx + `<div class="card menu">
+    <button data-act="tab" data-v="deudas"><span>🧾</span><span>Deudas</span><span>${(S.cfg.debts || []).filter(d => !d.paid).length ? money((S.cfg.debts || []).filter(d => !d.paid).reduce((t, d) => t + d.amount, 0)) : ""}</span></button>
     <button data-act="tab" data-v="hist"><span>🗓️</span><span>Historial de meses</span><span></span></button>
     <button data-act="budgets"><span>📊</span><span>Presupuestos por categoría</span><span>${Object.values(S.cfg.budgets).filter(v => v > 0).length} activos</span></button>
     <button data-act="cats"><span>🏷️</span><span>Categorías</span><span>${S.cfg.cats.length}</span></button>
@@ -814,6 +853,8 @@ document.addEventListener("click", e => {
     case "restore": $("#restoreFile").click(); break;
     case "close": closeSheet(); break;
     case "tab": S.tab = el.dataset.v; window.scrollTo(0, 0); render(); break;
+    case "newDebt": debtForm(); break;
+    case "editDebt": { const d = (S.cfg.debts || []).find(x => x.id === id); if (d) debtForm(d); break; }
     case "goMonth": S.month = id; S.tab = "inicio"; window.scrollTo(0, 0); render(); break;
   }
 });
