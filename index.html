@@ -87,6 +87,21 @@ main{padding:4px 16px 0;max-width:640px;margin:0 auto}
 .ccard summary{cursor:pointer;font-weight:700}
 .ccard .cl{display:flex;justify-content:space-between;padding:5px 0;border-top:1px solid rgba(255,255,255,.15);gap:8px}
 .ccard .cl:first-of-type{border-top:0}
+.ccard .split{margin-top:10px;background:rgba(0,0,0,.14);border-radius:12px;padding:8px 10px;font-size:13px}
+.ccard .split .cl{align-items:center}
+.ccard .usdl{margin-top:6px;font-size:12px;opacity:.9;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tg{display:inline-block;font-size:11px;font-weight:700;background:rgba(255,255,255,.2);border-radius:99px;padding:1px 7px;margin-left:5px;vertical-align:1px}
+.pbtn{border:0;border-radius:99px;padding:4px 10px;font-size:12px;font-weight:700;background:rgba(255,255,255,.22);color:#fff;margin-left:8px}
+.pbtn.on{background:#fff;color:#1A1A1A}
+.wk{padding:10px 0;border-top:1px solid var(--line)}
+.wk:first-of-type{border-top:0}
+.wk .bh{display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px;gap:8px}
+.wk .bh small{color:var(--mute)}
+.wk.cur .bh>span:first-child{color:var(--acc);font-weight:700}
+.wk .rest{font-size:12px;color:var(--mute);margin-top:4px}
+.owe{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line);font-size:14px}
+.owe:first-of-type{border-top:0}
+.owe .mid{flex:1;min-width:0}.owe .mid small{display:block;color:var(--mute);font-size:12px}
 .vbars{display:flex;align-items:flex-end;gap:8px;height:130px;padding-top:18px}
 .vbars .vb{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;font-size:11px;color:var(--mute)}
 .vbars .vb i{display:block;width:100%;max-width:34px;background:var(--acc);border-radius:8px 8px 3px 3px;min-height:3px}
@@ -117,7 +132,7 @@ main{padding:4px 16px 0;max-width:640px;margin:0 auto}
 .hyear small{font-weight:600;font-size:12px;color:var(--mute)}
 .back{border:0;background:none;color:var(--acc);font-weight:700;padding:4px 0 10px;font-size:14px}
 #mLabel{cursor:pointer}
-.menu button span:last-child{margin-left:auto;color:var(--mute);font-weight:500;font-size:13px}
+.menu button span:last-child{margin-left:auto;color:var(--mute);font-weight:500;font-size:13px;white-space:nowrap}
 .fix{display:flex;align-items:center;gap:10px;padding:11px 0;border-top:1px solid var(--line)}
 .fix:first-of-type{border-top:0}
 .fix .mid{flex:1;min-width:0}.fix .mid b{display:block;font-size:14px}.fix .mid small{color:var(--mute);font-size:12px}
@@ -236,7 +251,7 @@ const DEF_CATS = [
 const CARD_COLORS = ["#1F3A5F","#6B2D5C","#2F5D50","#8A4B1E","#3D3A8C","#5A5A5A","#A23B3B"];
 const ACC_TYPES = {efectivo:"Efectivo",mp:"Mercado Pago",banco:"Cuenta bancaria",pf:"Plazo fijo",fci:"FCI / inversión",otro:"Otro"};
 const BASE_METHODS = [{id:"efectivo",n:"Efectivo",i:"💵"},{id:"debito",n:"Débito / transf.",i:"🏦"},{id:"mp",n:"Mercado Pago",i:"📱"}];
-const defCfg = () => ({cats: DEF_CATS.map(c => ({...c})), cards: [], accounts: [], goals: [], budgets: {}, fixed: [], usd: 0, debts: []});
+const defCfg = () => ({cats: DEF_CATS.map(c => ({...c})), cards: [], accounts: [], goals: [], budgets: {}, fixed: [], usd: 0, debts: [], people: [], paid: {}, cardUsd: {}, weekly: {amount: 0, cats: ["super", "comida"]}});
 
 /* ---------- estado ---------- */
 const S = { cfg: defCfg(), months: {}, sav: [], month: ymOf(todayStr()), tab: "inicio", ready: false, mode: "db", filter: {type: "all", method: "all", q: ""} };
@@ -328,9 +343,41 @@ function cardSchedule(ymT) {
     if (it.type !== "gasto" || !String(it.method).startsWith("card:")) continue;
     const cid = it.method.slice(5), c = card(cid), n = Math.max(1, it.cuotas || 1);
     const k = diffM(firstDue(c, it.date), ymT);
-    if (k >= 0 && k < n) out.push({mov: it, cardId: cid, k: k + 1, n, amt: it.amount / n});
+    if (k < 0 || k >= n) continue;
+    const per = it.amount / n, usd = isUsd(it);
+    out.push({mov: it, cardId: cid, k: k + 1, n, ym: ymT, who: it.who || "", usd: usd ? per : 0, amt: usd ? per * cardRate(cid, ymT) : per});
   }
   return out;
+}
+/* dólar de cada resumen: si no se cargó uno para esa tarjeta y mes, se usa la cotización general */
+const cardRate = (cid, ym) => Number((S.cfg.cardUsd || {})[cid + "|" + ym]) || Number(S.cfg.usd) || 0;
+const isUsd = it => it.cur === "USD";
+const paidKey = (cid, ym, who) => cid + "|" + ym + "|" + who;
+const isPaid = (cid, ym, who) => !!(S.cfg.paid || {})[paidKey(cid, ym, who)];
+function movArs(it) {
+  if (!isUsd(it)) return it.amount;
+  const cid = String(it.method).startsWith("card:") ? it.method.slice(5) : "";
+  return it.amount * (cid ? cardRate(cid, firstDue(card(cid), it.date)) : Number(S.cfg.usd) || 0);
+}
+function owedBy(sched) {
+  const map = {};
+  for (const s of sched) {
+    if (!s.who) continue;
+    const p = map[s.who] || (map[s.who] = {who: s.who, total: 0, pend: 0, cards: {}});
+    p.total += s.amt; p.cards[s.cardId] = true;
+    if (!isPaid(s.cardId, s.ym, s.who)) p.pend += s.amt;
+  }
+  return Object.values(map).sort((a, b) => b.total - a.total);
+}
+function weekRanges(ym) { const [y, m] = ym.split("-").map(Number), last = new Date(y, m, 0).getDate(); return [[1, 7], [8, 14], [15, 21], [22, last]]; }
+function weeklyData(ym) {
+  const cats = (S.cfg.weekly && S.cfg.weekly.cats) || [];
+  const r = weekRanges(ym).map(([a, b]) => ({a, b, sp: 0}));
+  for (const it of S.months[ym] || []) {
+    if (it.type !== "gasto" || String(it.method).startsWith("card:") || !cats.includes(it.cat)) continue;
+    r[Math.min(3, Math.floor((Number(it.date.slice(8, 10)) - 1) / 7))].sp += it.amount;
+  }
+  return r;
 }
 function accBalance(a) { return (Number(a.initial) || 0) + S.sav.filter(s => s.accId === a.id).reduce((t, s) => t + s.amount, 0); }
 function savTotals() {
@@ -346,8 +393,13 @@ function stats(ym) {
     if (String(it.method).startsWith("card:")) continue;
     direct += it.amount; byMethod[it.method] = (byMethod[it.method] || 0) + it.amount; byCat[it.cat] = (byCat[it.cat] || 0) + it.amount;
   }
-  const sched = cardSchedule(ym); let cards = 0;
-  for (const s of sched) { cards += s.amt; byCat[s.mov.cat] = (byCat[s.mov.cat] || 0) + s.amt; }
+  const sched = cardSchedule(ym); let cards = 0, others = 0, noRate = false;
+  for (const s of sched) {
+    if (s.usd && !cardRate(s.cardId, ym)) noRate = true;
+    if (s.who) { others += s.amt; continue; }
+    cards += s.amt; byCat[s.mov.cat] = (byCat[s.mov.cat] || 0) + s.amt;
+  }
+  const owed = owedBy(sched).reduce((t, p) => t + p.pend, 0);
   byMethod.tarjetas = cards;
   let ahorro = 0;
   for (const s of S.sav) {
@@ -355,7 +407,7 @@ function stats(ym) {
     const a = acc(s.accId); if (!a) continue;
     if (a.cur === "USD") { if (s.ars) ahorro += s.ars; } else ahorro += s.amount;
   }
-  return {ing, direct, cards, ahorro, gastos: direct + cards, disp: ing - direct - cards - ahorro, byMethod, byCat, sched};
+  return {ing, direct, cards, others, owed, noRate, ahorro, gastos: direct + cards, disp: ing - direct - cards - ahorro, byMethod, byCat, sched};
 }
 function pendingFixed(ym) {
   const items = S.months[ym] || [];
@@ -390,6 +442,8 @@ function vInicio() {
   for (const [id, b] of Object.entries(S.cfg.budgets)) { const sp = st.byCat[id] || 0; if (b > 0 && sp > b) alerts.push(`<div class="alert">⚠️ Te pasaste en ${esc(cat(id).n)} por ${money(sp - b)}</div>`); else if (b > 0 && sp > b * .8) alerts.push(`<div class="alert" style="background:#2E2410;color:#F2D58A">🟡 Usaste el ${Math.round(sp / b * 100)}% de ${esc(cat(id).n)}</div>`); }
   const pf = pendingFixed(M);
   if (pf.length) alerts.push(`<div class="alert info">📌 ${pf.length} gasto${pf.length > 1 ? "s" : ""} fijo${pf.length > 1 ? "s" : ""} sin registrar este mes<button data-act="goFixed">Ver</button></div>`);
+  if (st.owed > 0.004) alerts.push(`<div class="alert info">💳 Te deben ${money(st.owed)} de las tarjetas de ${mOnly(M)}<button data-tab="cards">Ver</button></div>`);
+  if (st.noRate) alerts.push(`<div class="alert">💲 Tenés consumos en dólares en las tarjetas y falta la cotización<button data-act="usd">Cargar</button></div>`);
   const t = savTotals();
   const hasData = (S.months[M] || []).length || st.cards;
   return `
@@ -399,11 +453,12 @@ function vInicio() {
     <div class="grid">
       <div>Ingresos<b style="color:var(--in-on-acc)">${money(st.ing)}</b></div>
       <div>Gastos del día a día<b style="color:var(--out-on-acc)">${money(st.direct)}</b></div>
-      <div>Tarjetas (cuotas del mes)<b style="color:var(--out-on-acc)">${money(st.cards)}</b></div>
+      <div>${st.others ? "Tu parte de las tarjetas" : "Tarjetas (cuotas del mes)"}<b style="color:var(--out-on-acc)">${money(st.cards)}</b></div>
       <div>Ahorrado<b>${money(st.ahorro)}</b></div>
     </div>${cmp}
   </div>
   ${alerts.join("")}
+  ${weeklyCard(M)}
   ${!hasData ? `<div class="card"><h3>¡Arranquemos!</h3><div class="note">Tocá el <b>+</b> para cargar tu primer gasto o ingreso. Si usás tarjetas, agregalas en la pestaña <b>Tarjetas</b> con su fecha de cierre y vencimiento, así las cuotas caen en el mes correcto.</div></div>` : ""}
   <div class="card"><h3>Por medio de pago</h3><div class="tiles">
     <div class="tile"><span>💵 Efectivo</span><b style="color:var(--out)">${money(st.byMethod.efectivo)}</b></div>
@@ -417,22 +472,34 @@ function vInicio() {
     <div class="tile"><span>En dólares</span><b>${money(t.usd, "USD")}</b></div>
   </div>${S.cfg.usd ? `<div class="note" style="margin-top:10px">Total en pesos (dólar a ${money(S.cfg.usd)}): <b>${money(t.total)}</b></div>` : ""}</div>`;
 }
+function weeklyCard(M) {
+  const w = S.cfg.weekly || {}, amt = Number(w.amount) || 0;
+  if (!(amt > 0)) return "";
+  const data = weeklyData(M), today = todayStr(), curW = ymOf(today) === M ? Math.min(3, Math.floor((Number(today.slice(8, 10)) - 1) / 7)) : -1;
+  const tot = data.reduce((t, x) => t + x.sp, 0);
+  const names = (w.cats || []).map(id => cat(id).n).join(", ");
+  return `<div class="card"><h3>Comida por semana <button class="link" data-act="weekly">Editar</button></h3>
+    ${data.map((x, j) => { const p = Math.min(100, x.sp / amt * 100), cls = x.sp > amt ? "over" : x.sp > amt * .8 ? "warn" : "", left = amt - x.sp;
+      return `<div class="wk${j === curW ? " cur" : ""}"><div class="bh"><span>Semana ${j + 1} <small>· ${x.a} al ${x.b}${j === curW ? " · esta semana" : ""}</small></span><span><b>${money(x.sp)}</b> <small>de ${money(amt)}</small></span></div><div class="track"><div class="fill ${cls}" style="width:${p.toFixed(1)}%"></div></div>${x.sp > 0 || j === curW ? `<div class="rest" style="${left < 0 ? "color:var(--out)" : ""}">${left < 0 ? "Te pasaste " + money(-left) : "Te quedan " + money(left)}</div>` : ""}</div>`; }).join("")}
+    <div class="note" style="margin-top:10px">En el mes: <b>${money(tot)}</b> de ${money(amt * 4)}. Cuenta lo que gastás en ${esc(names || "las categorías elegidas")} sin tarjeta.</div></div>`;
+}
 function itemRow(it) {
-  const c = cat(it.cat), isCard = String(it.method).startsWith("card:");
-  const sub = [methodLabel(it.method)]; if (isCard && it.cuotas > 1) sub.push(it.cuotas + " cuotas de " + money(it.amount / it.cuotas));
-  return `<button class="item" data-act="editMov" data-id="${esc(it.id)}"><div class="ico">${esc(c.i)}</div><div class="mid"><b>${esc(it.note || c.n)}</b><small>${esc(it.note ? c.n + " · " : "")}${esc(sub.join(" · "))}</small></div><div class="amt ${it.type === "ingreso" ? "in" : "out"}">${it.type === "ingreso" ? "+" : "−"}${money(it.amount).replace("−", "")}</div></button>`;
+  const c = cat(it.cat), isCard = String(it.method).startsWith("card:"), cur = isUsd(it) ? "USD" : "ARS";
+  const sub = [methodLabel(it.method)]; if (isCard && it.cuotas > 1) sub.push(it.cuotas + " cuotas de " + money(it.amount / it.cuotas, cur));
+  if (it.who) sub.push("de " + it.who);
+  return `<button class="item" data-act="editMov" data-id="${esc(it.id)}"><div class="ico">${esc(c.i)}</div><div class="mid"><b>${esc(it.note || c.n)}</b><small>${esc(it.note ? c.n + " · " : "")}${esc(sub.join(" · "))}</small></div><div class="amt ${it.type === "ingreso" ? "in" : "out"}" ${it.who ? 'style="opacity:.6"' : ""}>${it.type === "ingreso" ? "+" : "−"}${money(it.amount, cur).replace("−", "")}</div></button>`;
 }
 function vMovs() {
   const f = S.filter; let items = (S.months[S.month] || []).slice();
   if (f.type !== "all") items = items.filter(i => i.type === f.type);
   if (f.method !== "all") items = items.filter(i => f.method === "card" ? String(i.method).startsWith("card:") : i.method === f.method);
-  if (f.q) { const q = f.q.toLowerCase(); items = items.filter(i => (i.note || "").toLowerCase().includes(q) || cat(i.cat).n.toLowerCase().includes(q)); }
+  if (f.q) { const q = f.q.toLowerCase(); items = items.filter(i => (i.note || "").toLowerCase().includes(q) || cat(i.cat).n.toLowerCase().includes(q) || (i.who || "").toLowerCase().includes(q)); }
   items.sort((a, b) => b.date.localeCompare(a.date) || (b.ts || 0) - (a.ts || 0));
   const chip = (k, v, l) => `<button class="fchip ${f[k] === v ? "on" : ""}" data-act="filt" data-k="${k}" data-v="${v}">${l}</button>`;
   let html = `<div class="filters">${chip("type", "all", "Todos")}${chip("type", "gasto", "Gastos")}${chip("type", "ingreso", "Ingresos")}<span style="width:6px;flex:none"></span>${chip("method", "all", "Todo medio")}${chip("method", "efectivo", "Efectivo")}${chip("method", "debito", "Débito")}${chip("method", "mp", "Mercado Pago")}${chip("method", "card", "Tarjetas")}</div>
   <input class="search" id="q" placeholder="Buscar por nota o categoría" value="${esc(f.q)}">`;
-  const tIn = items.filter(i => i.type === "ingreso").reduce((t, i) => t + i.amount, 0), tOut = items.filter(i => i.type === "gasto").reduce((t, i) => t + i.amount, 0);
-  html += `<div class="tiles" style="margin-bottom:4px"><div class="tile" style="background:var(--card);border:1px solid var(--line)"><span>Entró</span><b style="color:var(--in)">${money(tIn)}</b></div><div class="tile" style="background:var(--card);border:1px solid var(--line)"><span>Salió (total de compras)</span><b style="color:var(--out)">${money(tOut)}</b></div></div>`;
+  const tIn = items.filter(i => i.type === "ingreso").reduce((t, i) => t + i.amount, 0), tOut = items.filter(i => i.type === "gasto" && !i.who).reduce((t, i) => t + movArs(i), 0);
+  html += `<div class="tiles" style="margin-bottom:4px"><div class="tile" style="background:var(--card);border:1px solid var(--line)"><span>Entró</span><b style="color:var(--in)">${money(tIn)}</b></div><div class="tile" style="background:var(--card);border:1px solid var(--line)"><span>Salió (tus compras)</span><b style="color:var(--out)">${money(tOut)}</b></div></div>`;
   if (!items.length) return html + `<div class="empty">No hay movimientos en ${mName(S.month)}${f.type !== "all" || f.method !== "all" || f.q ? " con estos filtros" : ""}.</div>`;
   let day = "";
   html += `<div class="list">`;
@@ -444,17 +511,27 @@ function vCards() {
   const sched = []; for (let j = 0; j < 25; j++) sched.push(cardSchedule(addM(M, j)));
   let html = "";
   if (!S.cfg.cards.length) html += `<div class="card"><h3>Tus tarjetas</h3><div class="note">Agregá cada tarjeta con su día de cierre y de vencimiento. Así, cuando cargás una compra en cuotas, la app sabe en qué resumen cae cada cuota.</div></div>`;
+  const owe = owedBy(sched[0]);
+  if (owe.length) {
+    const pend = owe.reduce((t, p) => t + p.pend, 0);
+    html += `<div class="card"><h3>Lo que te tienen que pagar en ${mOnly(M)}</h3>${owe.map(p => `<div class="owe"><div class="ico">${p.pend > 0.004 ? "🧾" : "✅"}</div><div class="mid"><b>${esc(p.who)}</b><small>${Object.keys(p.cards).map(id => esc((card(id) || {}).name || "Tarjeta")).join(" · ")}</small></div><div style="text-align:right"><b style="color:${p.pend > 0.004 ? "var(--out)" : "var(--mute)"}">${money(p.pend > 0.004 ? p.pend : p.total)}</b><small style="display:block;color:var(--mute);font-size:12px">${p.pend > 0.004 ? (p.pend < p.total - 0.004 ? "falta de " + money(p.total) : "pendiente") : "pagó todo"}</small></div></div>`).join("")}
+      <div class="note" style="margin-top:8px">${pend > 0.004 ? "Falta cobrar " + money(pend) + ". " : ""}Marcá “¿Pagó?” en cada tarjeta cuando te pasen la plata. Lo de otras personas no se descuenta de tu disponible.</div></div>`;
+  }
   S.cfg.cards.forEach((c, i) => {
     const mine = j => sched[j].filter(s => s.cardId === c.id);
     const due = mine(0).reduce((t, s) => t + s.amt, 0), next = mine(1).reduce((t, s) => t + s.amt, 0);
     let future = 0; for (let j = 1; j < 25; j++) future += mine(j).reduce((t, s) => t + s.amt, 0);
-    const list = mine(0).sort((a, b) => b.amt - a.amt);
+    const list = mine(0).sort((a, b) => (a.who > b.who ? 1 : a.who < b.who ? -1 : 0) || b.amt - a.amt);
+    const usd0 = list.reduce((t, s) => t + s.usd, 0), rate = cardRate(c.id, M), ownRate = (S.cfg.cardUsd || {})[c.id + "|" + M];
+    const ppl = owedBy(list), own = list.filter(s => !s.who).reduce((t, s) => t + s.amt, 0);
     html += `<div class="ccard" style="background:${esc(c.color || CARD_COLORS[i % CARD_COLORS.length])}">
       <button class="edit" data-act="editCard" data-id="${esc(c.id)}">Editar</button>
       <div class="nm">${esc(c.name)}</div><div class="dt">Cierra el ${c.cierre} · Vence el ${c.venc}</div>
       <div class="due">Resumen que pagás en ${mOnly(M)}<b>${money(due)}</b></div>
+      ${usd0 ? `<div class="usdl"><span>Incluye ${money(usd0, "USD")}${rate ? " a " + money(rate) + (ownRate ? "" : " (cotización general)") : " · <b>falta la cotización</b>"}</span><button class="pbtn" style="margin:0" data-act="cardUsd" data-id="${esc(c.id)}">${rate ? "Cambiar dólar" : "Cargar dólar"}</button></div>` : ""}
       <div class="row"><div>En ${mOnly(addM(M, 1))}<b>${money(next)}</b></div><div style="text-align:right">Cuotas que faltan pagar<b>${money(future)}</b></div></div>
-      ${list.length ? `<details><summary>Detalle de ${mOnly(M)} (${list.length})</summary>${list.map(s => `<div class="cl"><span>${esc(s.mov.note || cat(s.mov.cat).n)}${s.n > 1 ? ` · cuota ${s.k}/${s.n}` : ""}</span><b>${money(s.amt)}</b></div>`).join("")}</details>` : ""}
+      ${ppl.length ? `<div class="split"><div class="cl"><span>Tuyo</span><b>${money(own)}</b></div>${ppl.map(p => { const pd = isPaid(c.id, M, p.who); return `<div class="cl"><span>${esc(p.who)}</span><span><b>${money(p.total)}</b><button class="pbtn${pd ? " on" : ""}" data-act="togglePaid" data-id="${esc(c.id)}" data-who="${esc(p.who)}">${pd ? "✓ Pagó" : "¿Pagó?"}</button></span></div>`; }).join("")}</div>` : ""}
+      ${list.length ? `<details><summary>Detalle de ${mOnly(M)} (${list.length})</summary>${list.map(s => `<div class="cl"><span>${esc(s.mov.note || cat(s.mov.cat).n)}${s.n > 1 ? ` · cuota ${s.k}/${s.n}` : ""}${s.who ? `<span class="tg">${esc(s.who)}</span>` : ""}</span><b>${s.usd ? money(s.usd, "USD") : money(s.amt)}</b></div>`).join("")}</details>` : ""}
     </div>`;
   });
   html += `<button class="btn ghost" data-act="newCard" style="margin:0 0 12px">+ Agregar tarjeta</button>`;
@@ -567,6 +644,8 @@ function vMas() {
     <button data-act="tab" data-v="deudas"><span>🧾</span><span>Deudas</span><span>${(S.cfg.debts || []).filter(d => !d.paid).length ? money((S.cfg.debts || []).filter(d => !d.paid).reduce((t, d) => t + d.amount, 0)) : ""}</span></button>
     <button data-act="tab" data-v="hist"><span>🗓️</span><span>Historial de meses</span><span></span></button>
     <button data-act="budgets"><span>📊</span><span>Presupuestos por categoría</span><span>${Object.values(S.cfg.budgets).filter(v => v > 0).length} activos</span></button>
+    <button data-act="weekly"><span>🛒</span><span>Comida por semana</span><span>${S.cfg.weekly && S.cfg.weekly.amount ? money(S.cfg.weekly.amount) : "Sin usar"}</span></button>
+    <button data-act="people"><span>👥</span><span>Personas que usan tus tarjetas</span><span>${(S.cfg.people || []).length || ""}</span></button>
     <button data-act="cats"><span>🏷️</span><span>Categorías</span><span>${S.cfg.cats.length}</span></button>
     <button data-act="usd"><span>💲</span><span>Cotización del dólar</span><span>${S.cfg.usd ? money(S.cfg.usd) : "Sin cargar"}</span></button>
     <button data-act="export"><span>📤</span><span>Exportar a Excel (CSV)</span><span></span></button>
@@ -594,10 +673,15 @@ function movForm(it) {
   openSheet(`<h2>${isNew ? "Nuevo movimiento" : "Editar movimiento"}</h2>
   <form id="f" autocomplete="off">
     <div class="seg">${radio("type", "gasto", "Gasto", m.type)}${radio("type", "ingreso", "Ingreso", m.type)}</div>
-    <div class="bigin"><span>$</span><input name="amount" inputmode="decimal" placeholder="0" value="${m.amount !== "" ? numIn(m.amount) : ""}"></div>
+    <div class="bigin"><span id="curSym">$</span><input name="amount" inputmode="decimal" placeholder="0" value="${m.amount !== "" ? numIn(m.amount) : ""}"></div>
     <div class="lab">Categoría</div><div class="chips" id="catChips"></div>
     <div class="lab">Medio de pago</div><div class="chips" id="metChips"></div>
-    <div id="cuotasBox" class="hidden"><label class="fld"><span>Cuotas</span><select name="cuotas">${[1,2,3,4,5,6,9,10,12,18,24].map(n => `<option value="${n}" ${n === (m.cuotas || 1) ? "selected" : ""}>${n === 1 ? "1 pago" : n + " cuotas"}</option>`).join("")}</select></label><div class="hint" id="cuotaInfo"></div></div>
+    <div id="cuotasBox" class="hidden">
+      <div class="lab">Moneda</div><div class="seg" style="margin-bottom:0">${radio("cur", "ARS", "Pesos", m.cur || "ARS")}${radio("cur", "USD", "Dólares", m.cur || "ARS")}</div>
+      <label class="fld"><span>Cuotas</span><select name="cuotas">${[1,2,3,4,5,6,9,10,12,18,24].map(n => `<option value="${n}" ${n === (m.cuotas || 1) ? "selected" : ""}>${n === 1 ? "1 pago" : n + " cuotas"}</option>`).join("")}</select></label><div class="hint" id="cuotaInfo"></div>
+      <div class="lab">¿De quién es el gasto?</div><div class="chips" id="whoChips">${[...new Set([...(S.cfg.people || []), ...(m.who ? [m.who] : [])])].reduce((h, p) => h + radio("who", p, esc(p), m.who || ""), radio("who", "", "🙋 Mío", m.who || ""))}${radio("who", "__new", "+ Otra persona", "")}</div>
+      <label class="fld hidden" id="newWhoBox"><span>Nombre</span><input name="newWho" maxlength="30" placeholder="Ej: Lisandro, Mamá"></label>
+    </div>
     <label class="fld"><span>Fecha</span><input type="date" name="date" value="${esc(m.date)}" required></label>
     <label class="fld"><span>Nota (opcional)</span><input name="note" value="${esc(m.note || "")}" maxlength="80" placeholder="Ej: compra en el chino, heladera…"></label>
     <button class="btn primary" type="submit">Guardar</button>
@@ -606,7 +690,7 @@ function movForm(it) {
   const f = $("#f");
   const drawCats = () => { const t = val(f, "type"); const cur = f.elements.cat ? val(f, "cat") : m.cat; $("#catChips").innerHTML = S.cfg.cats.filter(c => c.t === t).map(c => radio("cat", c.id, esc(c.i) + " " + esc(c.n), cur)).join(""); };
   const drawMet = () => { const t = val(f, "type"); let cur = f.elements.method ? val(f, "method") : m.method; if (t === "ingreso" && String(cur).startsWith("card:")) cur = "debito"; $("#metChips").innerHTML = methodOptions(t, cur); if (!val(f, "method")) { const first = f.querySelector('input[name="method"]'); if (first) first.checked = true; } upd(); };
-  const upd = () => { const isCard = String(val(f, "method")).startsWith("card:"); $("#cuotasBox").classList.toggle("hidden", !isCard); const n = Number(val(f, "cuotas")) || 1, a = parseAmt(val(f, "amount")); let info = ""; if (isCard) { const c = card(val(f, "method").slice(5)); if (n > 1 && a > 0) info = n + " cuotas de " + money(a / n) + ". "; if (c && val(f, "date")) info += "La primera cae en el resumen de " + mOnly(firstDue(c, val(f, "date"))) + "."; } $("#cuotaInfo").textContent = info; };
+  const upd = () => { const isCard = String(val(f, "method")).startsWith("card:"); $("#cuotasBox").classList.toggle("hidden", !isCard); const usd = isCard && val(f, "cur") === "USD"; $("#curSym").textContent = usd ? "US$" : "$"; $("#newWhoBox").classList.toggle("hidden", val(f, "who") !== "__new"); const n = Number(val(f, "cuotas")) || 1, a = parseAmt(val(f, "amount")); let info = ""; if (isCard) { const c = card(val(f, "method").slice(5)); if (n > 1 && a > 0) info = n + " cuotas de " + money(a / n, usd ? "USD" : "ARS") + ". "; if (c && val(f, "date")) info += "La primera cae en el resumen de " + mOnly(firstDue(c, val(f, "date"))) + "."; } $("#cuotaInfo").textContent = info; };
   drawCats(); drawMet();
   f.addEventListener("change", e => { if (e.target.name === "type") { drawCats(); drawMet(); } else upd(); });
   f.elements.amount.addEventListener("input", upd);
@@ -620,6 +704,16 @@ function movForm(it) {
     const method = val(f, "method"), isCard = method.startsWith("card:");
     const nm = {id: m.id || gid(), ts: m.ts || Date.now(), type: val(f, "type"), amount, date, cat: val(f, "cat"), method, cuotas: isCard ? Number(val(f, "cuotas")) || 1 : 1, note: val(f, "note").trim()};
     if (m.fixedId) nm.fixedId = m.fixedId;
+    if (isCard) {
+      if (val(f, "cur") === "USD") nm.cur = "USD";
+      let who = val(f, "who");
+      if (who === "__new") { who = val(f, "newWho").trim(); if (!who) { toast("Poné el nombre de la persona"); return; } }
+      if (who) {
+        const ex = (S.cfg.people || []).find(p => p.toLowerCase() === who.toLowerCase());
+        if (ex) who = ex; else { S.cfg.people = [...(S.cfg.people || []), who]; persist("config"); }
+        nm.who = who;
+      }
+    }
     upsertMov(nm, it && !it._new ? it : null);
     closeSheet(); toast(isNew ? "Listo, guardado" : "Cambios guardados");
     if (isNew && ymOf(date) !== S.month) { S.month = ymOf(date); }
@@ -749,17 +843,49 @@ function catForm(c) {
 }
 function usdForm() {
   openSheet(`<h2>Cotización del dólar</h2><form id="f"><div class="bigin"><span>$</span><input name="usd" inputmode="decimal" value="${S.cfg.usd ? numIn(S.cfg.usd) : ""}" placeholder="0"></div>
-    <div class="note">Cargá el valor que uses de referencia (MEP, blue u oficial). Sirve para ver tus ahorros en dólares convertidos a pesos. La app no lo actualiza sola: cambialo cuando quieras.</div>
+    <div class="note">Cargá el valor que uses de referencia (MEP, blue u oficial). Sirve para ver tus ahorros en dólares convertidos a pesos y para los consumos en dólares de las tarjetas (si no cargaste un dólar propio para ese resumen). La app no lo actualiza sola: cambialo cuando quieras.</div>
     <button class="btn primary">Guardar</button></form>`);
   const f = $("#f");
   f.onsubmit = e => { e.preventDefault(); S.cfg.usd = parseAmt(val(f, "usd")) || 0; persist("config"); closeSheet(); toast("Cotización guardada"); render(); };
+}
+function cardUsdForm(cid) {
+  const c = card(cid); if (!c) return;
+  const k = cid + "|" + S.month, cur = (S.cfg.cardUsd || {})[k];
+  openSheet(`<h2>Dólar del resumen</h2><div class="note">${esc(c.name)} · resumen de ${mName(S.month)}. Poné el valor del dólar que figura en el resumen para pasar a pesos los consumos en dólares.</div><form id="f">
+    <div class="bigin" style="margin-top:12px"><span>$</span><input name="v" inputmode="decimal" value="${cur ? numIn(cur) : ""}" placeholder="${S.cfg.usd ? numIn(S.cfg.usd) : "0"}"></div>
+    <div class="note">${S.cfg.usd ? "Si lo dejás vacío se usa la cotización general (" + money(S.cfg.usd) + ")." : "Si lo dejás vacío, se usa la cotización general que cargues en Más."}</div>
+    <button class="btn primary">Guardar</button></form>`);
+  const f = $("#f"); setTimeout(() => f.elements.v.focus(), 250);
+  f.onsubmit = e => { e.preventDefault(); const v = parseAmt(val(f, "v")); const m = {...(S.cfg.cardUsd || {})}; if (v > 0) m[k] = v; else delete m[k]; S.cfg.cardUsd = m; persist("config"); closeSheet(); toast("Dólar guardado"); render(); };
+}
+function weeklyForm() {
+  const w = S.cfg.weekly || {amount: 0, cats: []}, st = stats(S.month);
+  const sug = st.disp > 0 ? Math.round(st.disp / 4) : 0;
+  openSheet(`<h2>Comida por semana</h2><div class="note">Poné cuánto querés gastar por semana y en qué categorías. El mes se parte en 4 semanas: del 1 al 7, del 8 al 14, del 15 al 21 y del 22 a fin de mes. Cuenta lo que pagás con efectivo, débito o Mercado Pago (no tarjeta). Dejalo vacío para no usarlo.</div><form id="f">
+    <label class="fld"><span>Tope por semana</span><input name="amount" inputmode="decimal" value="${w.amount ? numIn(w.amount) : ""}" placeholder="Sin tope"></label>
+    ${sug ? `<div class="hint">Lo que te queda disponible en ${mOnly(S.month)} dividido 4: ${money(sug)} <button type="button" class="link" id="useSug">Usar</button></div>` : ""}
+    <div class="lab">Qué categorías cuentan</div><div class="chips">${S.cfg.cats.filter(c => c.t === "gasto").map(c => `<label><input type="checkbox" name="wc" value="${esc(c.id)}" ${(w.cats || []).includes(c.id) ? "checked" : ""}><span>${esc(c.i)} ${esc(c.n)}</span></label>`).join("")}</div>
+    <button class="btn primary">Guardar</button></form>`);
+  const f = $("#f"), us = $("#useSug"); if (us) us.onclick = () => { f.elements.amount.value = numIn(sug); };
+  f.onsubmit = e => { e.preventDefault(); const amount = parseAmt(val(f, "amount")) || 0; const cats = [...f.querySelectorAll('input[name="wc"]:checked')].map(x => x.value);
+    if (amount > 0 && !cats.length) { toast("Elegí al menos una categoría"); return; }
+    S.cfg.weekly = {amount, cats}; persist("config"); closeSheet(); toast(amount ? "Presupuesto semanal guardado" : "Presupuesto semanal desactivado"); render(); };
+}
+function peopleForm() {
+  const ppl = S.cfg.people || [];
+  openSheet(`<h2>Personas que usan tus tarjetas</h2><div class="note">Cuando cargás una compra con tarjeta podés elegir de quién es. Esos gastos no se descuentan de tu disponible y aparecen en “Lo que te tienen que pagar”.</div>
+    ${ppl.length ? ppl.map((p, i) => `<div class="fix"><div class="ico">👤</div><div class="mid"><b>${esc(p)}</b></div><button class="mini" data-act="delPerson" data-id="${i}">Quitar</button></div>`).join("") : `<div class="empty">Todavía no agregaste a nadie.</div>`}
+    <form id="f" style="display:flex;gap:8px;margin-top:12px"><input name="n" maxlength="30" placeholder="Nombre" style="flex:1;border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:12px"><button class="btn primary sm">Agregar</button></form>
+    <div class="note" style="margin-top:10px">Quitar a alguien de la lista no borra sus compras ya cargadas.</div>`);
+  const f = $("#f");
+  f.onsubmit = e => { e.preventDefault(); const n = val(f, "n").trim(); if (!n) return; if (ppl.some(p => p.toLowerCase() === n.toLowerCase())) { toast("Ya está en la lista"); return; } S.cfg.people = [...ppl, n]; persist("config"); peopleForm(); render(); };
 }
 function csv(rows) { return "﻿" + rows.map(r => r.map(v => { v = String(v ?? ""); return /[;"\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(";")).join("\r\n"); }
 function exportData(scope) {
   let items = scope === "all" ? allItems() : (S.months[S.month] || []);
   items = items.slice().sort((a, b) => a.date.localeCompare(b.date));
-  const rows = [["Fecha", "Tipo", "Categoría", "Medio de pago", "Cuotas", "Monto", "Nota"]];
-  for (const i of items) rows.push([i.date.split("-").reverse().join("/"), i.type === "gasto" ? "Gasto" : "Ingreso", cat(i.cat).n, methodLabel(i.method), i.cuotas || 1, String(i.amount).replace(".", ","), i.note || ""]);
+  const rows = [["Fecha", "Tipo", "Categoría", "Medio de pago", "Cuotas", "Monto", "Moneda", "De quién", "Nota"]];
+  for (const i of items) rows.push([i.date.split("-").reverse().join("/"), i.type === "gasto" ? "Gasto" : "Ingreso", cat(i.cat).n, methodLabel(i.method), i.cuotas || 1, String(i.amount).replace(".", ","), isUsd(i) ? "USD" : "ARS", i.who || "Yo", i.note || ""]);
   if (scope === "all") { rows.push([]); rows.push(["AHORROS"]); rows.push(["Fecha", "Cuenta", "Moneda", "Monto", "Pesos usados", "Nota"]); for (const s of S.sav.slice().sort((a, b) => a.date.localeCompare(b.date))) { const a = acc(s.accId); rows.push([s.date.split("-").reverse().join("/"), a ? a.name : "", a ? a.cur : "", String(s.amount).replace(".", ","), s.ars ? String(s.ars).replace(".", ",") : "", s.note || ""]); } }
   return {data: csv(rows), filename: scope === "all" ? "mis-finanzas-completo.csv" : "mis-finanzas-" + S.month + ".csv", count: items.length};
 }
@@ -855,6 +981,11 @@ document.addEventListener("click", e => {
     case "tab": S.tab = el.dataset.v; window.scrollTo(0, 0); render(); break;
     case "newDebt": debtForm(); break;
     case "editDebt": { const d = (S.cfg.debts || []).find(x => x.id === id); if (d) debtForm(d); break; }
+    case "togglePaid": { const k = paidKey(id, S.month, el.dataset.who), p = {...(S.cfg.paid || {})}; if (p[k]) delete p[k]; else p[k] = true; S.cfg.paid = p; persist("config"); render(); break; }
+    case "cardUsd": cardUsdForm(id); break;
+    case "weekly": weeklyForm(); break;
+    case "people": peopleForm(); break;
+    case "delPerson": { const ppl = (S.cfg.people || []).slice(); ppl.splice(Number(id), 1); S.cfg.people = ppl; persist("config"); peopleForm(); render(); break; }
     case "goMonth": S.month = id; S.tab = "inicio"; window.scrollTo(0, 0); render(); break;
   }
 });
