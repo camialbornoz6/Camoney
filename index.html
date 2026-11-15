@@ -191,6 +191,7 @@ nav.tabs button.on{color:var(--acc)}
 .budrow input{width:140px;border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:10px;text-align:right}
 #toast{position:fixed;left:50%;bottom:calc(var(--nav) + env(safe-area-inset-bottom) + 90px);transform:translateX(-50%) translateY(20px);background:#2A2140;color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;font-weight:600;opacity:0;transition:.2s;z-index:30;pointer-events:none;max-width:86vw;text-align:center}
 #toast.show{opacity:1;transform:translateX(-50%)}
+body.auth nav.tabs,body.auth #fab,body.auth .mswitch{display:none!important}
 .loading{text-align:center;color:var(--mute);padding:60px 0}
 </style>
 </head>
@@ -287,13 +288,14 @@ function applyCfg(d) {
 function persist(docId) {
   if (S.mode === "local") { saveLocal(); return; }
   if (!db) return;
-  const body = docId === "config" ? JSON.parse(JSON.stringify(S.cfg))
+  const body = JSON.parse(JSON.stringify(docId === "config" ? S.cfg
     : docId === "savings" ? {items: S.sav}
-    : {items: S.months[docId.slice(2)] || []};
+    : {items: S.months[docId.slice(2)] || []}));
   const prev = queues[docId] || Promise.resolve();
   queues[docId] = prev.then(() => db.doc(base + "/" + docId).set(body)).catch(e => {
     const code = e && e.code;
-    if (code === "quota_exceeded") toast("Se llenó el espacio de guardado.");
+    if (code === "quota_exceeded" || code === "resource-exhausted") toast("Se llenó el espacio de guardado.");
+    else if (code === "permission-denied") toast("No se pudo guardar: volvé a entrar a tu cuenta.");
     else if (code === "unavailable") setTimeout(() => persist(docId), 800 + Math.random() * 800);
     else if (code === "invalid_argument") toast("No se pudo guardar. Revisá que tengas acceso para editar.");
     else toast("No se pudo guardar el cambio.");
@@ -308,17 +310,17 @@ function useLocal() {
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
   S.ready = true; render();
 }
-async function initStore() {
-  let timer = setTimeout(() => { if (!S.ready) banner("Todavía no pude conectar con tus datos. Revisá la conexión…"); }, 10000);
-  try {
-    if (!window.claude || typeof window.claude.use !== "function") { STANDALONE = true; throw 0; }
-    db = await window.claude.use("db");
-    const user = await window.claude.use("user");
-    const uid = user ? await user.id() : null;
-    if (!db || !uid) throw 0;
-    base = "data/users/" + uid;
-  } catch (e) { clearTimeout(timer); db = null; useLocal(); return; }
-  db.collection(base).onSnapshot(snap => {
+/* ---------- nube propia (Firebase) ----------
+   Cuando la app se abre fuera de Claude (instalada en el celu o desde GitHub Pages) y FB tiene datos,
+   guarda en Firebase con login por mail y contraseña. Así el celu y la compu ven lo mismo. */
+const FB = null; // ← acá va el firebaseConfig del proyecto
+const FBU = "https://www.gstatic.com/firebasejs/10.14.1/";
+let fbAuth = null, unsub = null;
+function loadScript(src) { return new Promise((ok, ko) => { const el = document.createElement("script"); el.src = src; el.onload = ok; el.onerror = ko; document.head.appendChild(el); }); }
+function listen(fromFb) {
+  let first = true;
+  const timer = setTimeout(() => { if (!S.ready) banner("Todavía no pude conectar con tus datos. Revisá la conexión…"); }, 10000);
+  unsub = db.collection(base).onSnapshot(snap => {
     let cfg = null; const months = {}; let sav = [];
     for (const d of snap.docs) {
       const data = d.data() || {};
@@ -327,13 +329,82 @@ async function initStore() {
       else if (d.id.startsWith("m-")) months[d.id.slice(2)] = cleanItems(data.items);
     }
     applyCfg(cfg); S.months = months; S.sav = sav;
-    if (!snap.metadata.fromCache) { clearTimeout(timer); banner(""); }
+    if (!snap.metadata.fromCache) { clearTimeout(timer); banner(""); if (fromFb && first) { first = false; if (snap.empty) offerUpload(); } }
     S.ready = true; render();
   }, err => {
     clearTimeout(timer);
-    banner(err && err.code === "revoked" ? "Se perdió el acceso a tus datos." : "No pude cargar tus datos. Probá abrir la app de nuevo más tarde.");
+    banner(err && (err.code === "revoked" || err.code === "permission-denied") ? "Se perdió el acceso a tus datos." : "No pude cargar tus datos. Probá abrir la app de nuevo más tarde.");
     S.ready = true; render();
   });
+}
+function localData() { try { const d = JSON.parse(localStorage.getItem(LS) || "null"); return d && (Object.keys(d.months || {}).length || (d.sav || []).length || (d.cfg && ((d.cfg.cards || []).length || (d.cfg.accounts || []).length))) ? d : null; } catch (e) { return null; } }
+function offerUpload() {
+  const d = localData(); if (!d || localStorage.getItem(LS + "-subido")) return;
+  openSheet(`<h2>Datos en este dispositivo</h2><div class="note">Encontré datos que habías cargado antes en este dispositivo, sin cuenta. ¿Los paso a tu cuenta para verlos también en los otros?</div>
+    <button class="btn primary" id="upGo">Pasarlos a mi cuenta</button><button class="btn ghost" id="upNo">No, empezar de cero</button>`);
+  $("#upGo").onclick = () => { localStorage.setItem(LS + "-subido", "1"); applyRestore({cfg: d.cfg, months: d.months || {}, sav: d.sav || []}); };
+  $("#upNo").onclick = () => { localStorage.setItem(LS + "-subido", "1"); closeSheet(); };
+}
+const AUTH_ERR = {"auth/invalid-credential": "Mail o contraseña incorrectos.", "auth/wrong-password": "Mail o contraseña incorrectos.", "auth/user-not-found": "No hay ninguna cuenta con ese mail.", "auth/invalid-email": "Ese mail no es válido.", "auth/email-already-in-use": "Ya hay una cuenta con ese mail: tocá Entrar.", "auth/weak-password": "La contraseña tiene que tener al menos 6 caracteres.", "auth/missing-password": "Escribí la contraseña.", "auth/network-request-failed": "No hay conexión. Probá de nuevo.", "auth/too-many-requests": "Demasiados intentos. Esperá unos minutos."};
+function loginView(msg) {
+  document.body.classList.add("auth"); closeSheet();
+  $("#view").innerHTML = `<div class="card" style="margin-top:24px"><h3>Entrá a Camoney</h3>
+    <div class="note">Con tu cuenta ves los mismos datos en el celu y en la compu.</div>
+    <form id="lf"><label class="fld"><span>Mail</span><input name="em" type="email" autocomplete="email" required></label>
+    <label class="fld"><span>Contraseña</span><input name="pw" type="password" autocomplete="current-password" minlength="6" required></label>
+    <div class="note" id="lerr" style="color:var(--out);margin-top:10px">${esc(msg || "")}</div>
+    <button class="btn primary" data-m="in">Entrar</button>
+    <button class="btn ghost" type="button" data-m="up">Crear cuenta</button>
+    <button class="btn danger" type="button" data-m="reset" style="color:var(--mute)">Me olvidé la contraseña</button></form></div>`;
+  const f = $("#lf"), err = m => { $("#lerr").textContent = m; };
+  const run = async m => {
+    const em = val(f, "em").trim(), pw = val(f, "pw");
+    if (!em) { err("Escribí tu mail."); return; }
+    f.querySelectorAll("button").forEach(b => b.disabled = true); err("");
+    try {
+      if (m === "reset") { await fbAuth.sendPasswordResetEmail(em); err("Te mandé un mail para cambiar la contraseña (fijate en spam)."); }
+      else if (m === "up") await fbAuth.createUserWithEmailAndPassword(em, pw);
+      else await fbAuth.signInWithEmailAndPassword(em, pw);
+    } catch (e) { err(AUTH_ERR[e && e.code] || "No se pudo. Probá de nuevo."); }
+    f.querySelectorAll("button").forEach(b => b.disabled = false);
+  };
+  f.onsubmit = e => { e.preventDefault(); run("in"); };
+  f.querySelectorAll("button[type=button]").forEach(b => b.onclick = () => run(b.dataset.m));
+}
+async function initFirebase() {
+  try {
+    await loadScript(FBU + "firebase-app-compat.js");
+    await Promise.all([loadScript(FBU + "firebase-auth-compat.js"), loadScript(FBU + "firebase-firestore-compat.js")]);
+  } catch (e) { $("#view").innerHTML = `<div class="loading">No pude conectarme. Revisá que tengas internet y volvé a abrir la app.</div>`; return; }
+  firebase.initializeApp(FB);
+  const fs = firebase.firestore();
+  try { fs.settings({ignoreUndefinedProperties: true}); } catch (e) {}
+  try { await fs.enablePersistence({synchronizeTabs: true}); } catch (e) {}
+  fbAuth = firebase.auth();
+  fbAuth.onAuthStateChanged(u => {
+    if (unsub) { unsub(); unsub = null; }
+    if (!u) { db = null; S.ready = false; S.user = ""; S.mode = "login"; loginView(); return; }
+    document.body.classList.remove("auth");
+    db = fs; base = "users/" + u.uid; S.mode = "fb"; S.user = u.email || "";
+    $("#view").innerHTML = `<div class="loading">Cargando tus datos…</div>`;
+    listen(true);
+  });
+}
+function logout() {
+  if (!fbAuth) return;
+  closeSheet(); S.cfg = defCfg(); S.months = {}; S.sav = []; S.tab = "inicio";
+  fbAuth.signOut();
+}
+async function initStore() {
+  try {
+    if (!window.claude || typeof window.claude.use !== "function") { STANDALONE = true; throw 0; }
+    db = await window.claude.use("db");
+    const user = await window.claude.use("user");
+    const uid = user ? await user.id() : null;
+    if (!db || !uid) throw 0;
+    base = "data/users/" + uid;
+  } catch (e) { db = null; if (STANDALONE && FB) { initFirebase(); return; } useLocal(); return; }
+  listen(false);
 }
 
 /* ---------- cálculos ---------- */
@@ -760,6 +831,7 @@ function vMas() {
     <button data-act="export"><span>📤</span><span>Exportar a Excel (CSV)</span><span></span></button>
     <button data-act="backup"><span>💾</span><span>Copia de seguridad</span><span></span></button>
     <button data-act="about"><span>🔒</span><span>Tus datos</span><span></span></button>
+    ${S.mode === "fb" ? `<button data-act="logout"><span>🚪</span><span>Cerrar sesión</span><span>${esc(S.user)}</span></button>` : ""}
   </div>`;
 }
 
@@ -1075,7 +1147,7 @@ async function doExport(scope) {
 }
 function aboutForm() {
   openSheet(`<h2>Tus datos</h2><div class="note">
-    ${STANDALONE ? "Tus datos se guardan <b>solo en este celular</b>, dentro de la app. No se mandan a ningún servidor y nadie más puede verlos.<br><br>Como no hay copia en la nube, si borrás la app o los datos del navegador se pierden. Hacé una <b>copia de seguridad</b> de vez en cuando (en Más → Copia de seguridad) y guardala en tu Drive o mandátela por mail." : S.mode === "db" ? "Tus datos se guardan en tu cuenta de Claude, en un espacio privado: nadie más que vos puede verlos, ni siquiera si compartís el link de la app. Se sincronizan entre tus dispositivos." : "Ahora mismo estás en <b>modo local</b>: los datos quedan solo en este navegador. Abrí la app desde Claude con tu sesión iniciada para guardarlos en la nube."}
+    ${S.mode === "fb" ? "Tus datos se guardan en tu cuenta de Camoney (" + esc(S.user) + "), en un espacio privado: solo vos podés verlos. Se sincronizan entre el celu y la compu, y si no tenés internet podés seguir cargando: se suben solos cuando vuelve la conexión." : STANDALONE ? "Tus datos se guardan <b>solo en este celular</b>, dentro de la app. No se mandan a ningún servidor y nadie más puede verlos.<br><br>Como no hay copia en la nube, si borrás la app o los datos del navegador se pierden. Hacé una <b>copia de seguridad</b> de vez en cuando (en Más → Copia de seguridad) y guardala en tu Drive o mandátela por mail." : S.mode === "db" ? "Tus datos se guardan en tu cuenta de Claude, en un espacio privado: nadie más que vos puede verlos, ni siquiera si compartís el link de la app. Se sincronizan entre tus dispositivos." : "Ahora mismo estás en <b>modo local</b>: los datos quedan solo en este navegador. Abrí la app desde Claude con tu sesión iniciada para guardarlos en la nube."}
     <br><br>Los montos de tarjetas se calculan con las fechas de cierre que cargaste; tomalos como estimación y chequealos contra el resumen real.</div>
     <button class="btn ghost" data-act="close">Entendido</button>`);
 }
@@ -1137,6 +1209,7 @@ document.addEventListener("click", e => {
     case "doExport": doExport(el.dataset.scope); break;
     case "copyExport": { const x = exportData("all"); navigator.clipboard.writeText(x.data.slice(1)).then(() => toast("Copiado"), () => toast("No pude copiar")); break; }
     case "about": aboutForm(); break;
+    case "logout": logout(); break;
     case "backup": backupForm(); break;
     case "doBackup": doBackup(); break;
     case "restore": $("#restoreFile").click(); break;
