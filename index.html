@@ -193,6 +193,12 @@ nav.tabs button.on{color:var(--acc)}
 #toast.show{opacity:1;transform:translateX(-50%)}
 body.auth nav.tabs,body.auth #fab,body.auth .mswitch{display:none!important}
 .loading{text-align:center;color:var(--mute);padding:60px 0}
+.qbar{display:flex;justify-content:flex-end;margin:-4px 0 10px}
+.qbtn{border:1px solid var(--acc);background:var(--acc-soft);color:var(--acc);border-radius:99px;padding:8px 14px;font-size:13px;font-weight:700}
+.qrow{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line)}
+.qrow:first-of-type{border-top:0}
+.qrow .mid{flex:1;min-width:0}.qrow .mid b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.qrow small{color:var(--mute);font-size:12px}
+.qrow select{width:100%;margin-top:6px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:7px 8px;font-size:13px}
 </style>
 </head>
 <body>
@@ -259,7 +265,7 @@ const DEF_CATS = [
 const CARD_COLORS = ["#1F3A5F","#6B2D5C","#2F5D50","#8A4B1E","#3D3A8C","#5A5A5A","#A23B3B"];
 const ACC_TYPES = {efectivo:"Efectivo",mp:"Mercado Pago",banco:"Cuenta bancaria",pf:"Plazo fijo",fci:"FCI / inversión",otro:"Otro"};
 const BASE_METHODS = [{id:"efectivo",n:"Efectivo",i:"💵"},{id:"debito",n:"Débito / transf.",i:"🏦"},{id:"mp",n:"Mercado Pago",i:"📱"}];
-const defCfg = () => ({cats: DEF_CATS.map(c => ({...c})), cards: [], accounts: [], goals: [], budgets: {}, fixed: [], usd: 0, debts: [], people: [], paid: {}, cardUsd: {}, weekly: {amount: 0, cats: ["super", "comida"]}, mbudgets: {}});
+const defCfg = () => ({cats: DEF_CATS.map(c => ({...c})), cards: [], accounts: [], goals: [], budgets: {}, fixed: [], usd: 0, debts: [], people: [], paid: {}, cardUsd: {}, weekly: {amount: 0, cats: ["super", "comida"]}, mbudgets: {}, quick: []});
 
 /* ---------- estado ---------- */
 const S = { cfg: defCfg(), months: {}, sav: [], month: ymOf(todayStr()), tab: "inicio", ready: false, mode: "db", filter: {type: "all", method: "all", q: ""} };
@@ -328,8 +334,8 @@ function listen(fromFb) {
   let first = true;
   const timer = setTimeout(() => {
     if (S.ready && !fromFb) return;
-    banner("Todavía no pude conectar con tus datos. Revisá la conexión… (v16)");
-    if (fromFb && db) db.collection(base).get({source: "server"}).then(() => banner("Conecté, pero tardó. Cerrá y abrí la app de nuevo. (v16)"), e => banner("No pude conectar (v16): " + ((e && e.code) || "") + " — " + ((e && e.message) || String(e)).slice(0, 180)));
+    banner("Todavía no pude conectar con tus datos. Revisá la conexión… (v17)");
+    if (fromFb && db) db.collection(base).get({source: "server"}).then(() => banner("Conecté, pero tardó. Cerrá y abrí la app de nuevo. (v17)"), e => banner("No pude conectar (v17): " + ((e && e.code) || "") + " — " + ((e && e.message) || String(e)).slice(0, 180)));
   }, 8000);
   unsub = db.collection(base).onSnapshot(snap => {
     let cfg = null; const months = {}; let sav = [];
@@ -550,6 +556,8 @@ function vInicio() {
   const t = savTotals();
   const hasData = (S.months[M] || []).length || st.cards;
   return `
+  <div class="qbar"><button class="qbtn" data-act="quick">⚡ Registro rápido de gasto</button></div>
+  ${quickCard()}
   <div class="card hero">
     <div class="lbl">Disponible en ${mOnly(M)}</div>
     <div class="big">${money(st.disp)}</div>
@@ -946,6 +954,72 @@ function movForm(it, onDone) {
   };
   if (!isNew) twoTap($("#delBtn"), () => { removeMov(it); closeSheet(); toast("Movimiento eliminado"); render(); });
 }
+/* ---------- registro rápido ----------
+   Gastos anotados al vuelo (fecha de hoy, importe, detalle y categoría). Quedan pendientes
+   hasta que se pasan a gastos de verdad eligiendo con qué se pagó. */
+const quickList = () => (S.cfg.quick || []).filter(q => q && q.id && typeof q.amount === "number");
+function quickCard() {
+  const list = quickList(); if (!list.length) return "";
+  const tot = list.reduce((t, q) => t + q.amount, 0);
+  return `<div class="card"><h3>⚡ Gastos rápidos sin pasar <span style="color:var(--out)">${money(tot)}</span></h3>
+    ${list.slice().sort((a, b) => a.date.localeCompare(b.date)).map(q => `<button class="item" data-act="editQuick" data-id="${esc(q.id)}"><div class="ico">${esc(cat(q.cat).i)}</div><div class="mid"><b>${esc(q.note || cat(q.cat).n)}</b><small>${esc((q.note ? cat(q.cat).n + " · " : "") + (q.date === todayStr() ? "hoy" : dayLabel(q.date)))}</small></div><div class="amt out">−${money(q.amount)}</div></button>`).join("")}
+    <button class="btn primary" data-act="passQuick">Pasar a gastos</button>
+    <div class="note" style="margin-top:8px">Todavía no cuentan en el mes: se suman cuando los pasás.</div></div>`;
+}
+function quickForm(q) {
+  const isNew = !q; q = q || {date: todayStr(), amount: "", note: "", cat: ""};
+  const opts = gastoCats().map(c => `<option value="${esc(c.id)}" ${c.id === q.cat ? "selected" : ""}>${esc(c.i)} ${esc(c.n)}</option>`).join("");
+  openSheet(`<h2>${isNew ? "Registro rápido de gasto" : "Editar gasto rápido"}</h2>
+  <div class="note" style="margin-bottom:10px">📅 ${q.date === todayStr() ? "Hoy, " : ""}${esc(dayLabel(q.date))}</div>
+  <form id="qf" autocomplete="off">
+    <div class="bigin"><span>$</span><input name="amount" inputmode="decimal" placeholder="0" value="${q.amount !== "" ? numIn(q.amount) : ""}"></div>
+    <label class="fld"><span>Detalle</span><input name="note" value="${esc(q.note || "")}" maxlength="80" placeholder="Ej: café, kiosco, nafta…"></label>
+    <label class="fld"><span>Categoría</span><select name="cat"><option value="">Elegí una categoría</option>${opts}</select></label>
+    <button class="btn primary" type="submit">Guardar</button>
+    ${isNew ? `<button class="btn ghost" type="button" id="qMore">Guardar y anotar otro</button>` : `<button type="button" class="btn danger" id="delBtn">Eliminar</button>`}
+  </form>`);
+  const f = $("#qf");
+  if (isNew) setTimeout(() => f.elements.amount.focus(), 250);
+  const save = more => {
+    const amount = parseAmt(val(f, "amount"));
+    if (!(amount > 0)) { toast("Poné un importe válido"); return; }
+    if (!val(f, "cat")) { toast("Elegí una categoría"); return; }
+    const nq = {id: q.id || gid(), ts: q.ts || Date.now(), date: q.date, amount, note: val(f, "note").trim(), cat: val(f, "cat")};
+    const list = quickList();
+    S.cfg.quick = isNew ? [...list, nq] : list.map(x => x.id === nq.id ? nq : x);
+    persist("config"); render();
+    if (more) { quickForm(); toast("Anotado. Seguí con el próximo"); } else { closeSheet(); toast("Anotado"); }
+  };
+  f.onsubmit = e => { e.preventDefault(); save(false); };
+  const mo = $("#qMore"); if (mo) mo.onclick = () => save(true);
+  if (!isNew) twoTap($("#delBtn"), () => { S.cfg.quick = quickList().filter(x => x.id !== q.id); persist("config"); closeSheet(); toast("Eliminado"); render(); });
+}
+function passQuickForm() {
+  const list = quickList().slice().sort((a, b) => a.date.localeCompare(b.date)); if (!list.length) { closeSheet(); return; }
+  const mopts = cur => BASE_METHODS.map(m => `<option value="${m.id}" ${m.id === cur ? "selected" : ""}>${m.i} ${m.n}</option>`).join("") + S.cfg.cards.map(c => `<option value="card:${esc(c.id)}">💳 ${esc(c.name)}</option>`).join("");
+  openSheet(`<h2>Pasar a gastos</h2>
+  <div class="note" style="margin-bottom:6px">Cada uno se suma como gasto en su categoría. Elegí con qué lo pagaste.</div>
+  <form id="pf">
+    <label class="fld"><span>Medio de pago para todos</span><select id="pAll">${mopts("efectivo")}</select></label>
+    <div style="margin-top:8px">${list.map(q => `<div class="qrow"><div class="ico">${esc(cat(q.cat).i)}</div><div class="mid"><b>${esc(q.note || cat(q.cat).n)} · ${money(q.amount)}</b><small>${esc(cat(q.cat).n)} · ${esc(q.date === todayStr() ? "hoy" : dayLabel(q.date))}</small><select name="m_${esc(q.id)}">${mopts("efectivo")}</select></div></div>`).join("")}</div>
+    <button class="btn primary" type="submit">Pasar ${list.length} gasto${list.length > 1 ? "s" : ""} (${money(list.reduce((t, q) => t + q.amount, 0))})</button>
+  </form>`);
+  const f = $("#pf");
+  $("#pAll").onchange = e => f.querySelectorAll('select[name^="m_"]').forEach(s => { s.value = e.target.value; });
+  f.onsubmit = e => {
+    e.preventDefault();
+    const months = new Set();
+    for (const q of list) {
+      const method = val(f, "m_" + q.id) || "efectivo", y = ymOf(q.date);
+      const nm = {id: gid(), ts: q.ts || Date.now(), type: "gasto", amount: q.amount, date: q.date, cat: q.cat, method, cuotas: 1, note: q.note || ""};
+      S.months[y] = [...(S.months[y] || []), nm].sort((a, b) => a.date.localeCompare(b.date)); months.add(y);
+    }
+    months.forEach(saveMonth);
+    const done = new Set(list.map(q => q.id));
+    S.cfg.quick = quickList().filter(x => !done.has(x.id)); persist("config");
+    closeSheet(); toast(list.length === 1 ? "Pasado a gastos" : list.length + " gastos pasados"); render();
+  };
+}
 function upsertMov(nm, old) {
   if (old && ymOf(old.date) !== ymOf(nm.date)) { const o = ymOf(old.date); S.months[o] = (S.months[o] || []).filter(i => i.id !== old.id); saveMonth(o); }
   const y = ymOf(nm.date), arr = (S.months[y] || []).filter(i => i.id !== nm.id);
@@ -1197,6 +1271,9 @@ document.addEventListener("click", e => {
   const el = e.target.closest("[data-act]"); if (!el) return;
   const id = el.dataset.id, a = el.dataset.act;
   switch (a) {
+    case "quick": quickForm(); break;
+    case "editQuick": { const q = quickList().find(x => x.id === id); if (q) quickForm(q); break; }
+    case "passQuick": passQuickForm(); break;
     case "editMov": { const it = findMov(id); if (it) movForm(it); break; }
     case "filt": S.filter[el.dataset.k] = el.dataset.v; render(); break;
     case "newCard": cardForm(); break;
