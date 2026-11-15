@@ -328,8 +328,8 @@ function listen(fromFb) {
   let first = true;
   const timer = setTimeout(() => {
     if (S.ready && !fromFb) return;
-    banner("Todavía no pude conectar con tus datos. Revisá la conexión… (v14)");
-    if (fromFb && db) db.collection(base).get({source: "server"}).then(() => banner("Conecté, pero tardó. Cerrá y abrí la app de nuevo. (v14)"), e => banner("No pude conectar (v14): " + ((e && e.code) || "") + " — " + ((e && e.message) || String(e)).slice(0, 180)));
+    banner("Todavía no pude conectar con tus datos. Revisá la conexión… (v15)");
+    if (fromFb && db) db.collection(base).get({source: "server"}).then(() => banner("Conecté, pero tardó. Cerrá y abrí la app de nuevo. (v15)"), e => banner("No pude conectar (v15): " + ((e && e.code) || "") + " — " + ((e && e.message) || String(e)).slice(0, 180)));
   }, 8000);
   unsub = db.collection(base).onSnapshot(snap => {
     let cfg = null; const months = {}; let sav = [];
@@ -396,7 +396,7 @@ async function initFirebase() {
     if (unsub) { unsub(); unsub = null; }
     if (!u) { db = null; S.ready = false; S.user = ""; S.mode = "login"; loginView(); return; }
     document.body.classList.remove("auth");
-    db = fs; base = "users/" + u.uid; S.mode = "fb"; S.user = u.email || "";
+    db = fs; base = "users/" + u.uid + "/data"; S.mode = "fb"; S.user = u.email || "";
     $("#view").innerHTML = `<div class="loading">Cargando tus datos…</div>`;
     listen(true);
   });
