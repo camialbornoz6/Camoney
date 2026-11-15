@@ -343,8 +343,8 @@ function listen(fromFb) {
   let first = true;
   const timer = setTimeout(() => {
     if (S.ready && !fromFb) return;
-    banner("Todavía no pude conectar con tus datos. Revisá la conexión… (v21)");
-    if (fromFb && db) db.collection(base).get({source: "server"}).then(() => banner("Conecté, pero tardó. Cerrá y abrí la app de nuevo. (v21)"), e => banner("No pude conectar (v21): " + ((e && e.code) || "") + " — " + ((e && e.message) || String(e)).slice(0, 180)));
+    banner("Todavía no pude conectar con tus datos. Revisá la conexión… (v22)");
+    if (fromFb && db) db.collection(base).get({source: "server"}).then(() => banner("Conecté, pero tardó. Cerrá y abrí la app de nuevo. (v22)"), e => banner("No pude conectar (v22): " + ((e && e.code) || "") + " — " + ((e && e.message) || String(e)).slice(0, 180)));
   }, 8000);
   unsub = db.collection(base).onSnapshot(snap => {
     let cfg = null; const months = {}; let sav = [];
@@ -491,17 +491,19 @@ function savTotals() {
 }
 function stats(ym) {
   const items = S.months[ym] || [];
-  let ing = 0, ingBud = 0, direct = 0; const byMethod = {efectivo: 0, debito: 0, mp: 0, tarjetas: 0}, byCat = {};
+  let ing = 0, ingBud = 0, direct = 0; const byMethod = {efectivo: 0, debito: 0, mp: 0, tarjetas: 0}, byCat = {}, byCatAll = {}; let fromExtra = 0;
   for (const it of items) {
     if (it.type === "ingreso") { ing += it.amount; if (!it.noBud) ingBud += it.amount; continue; }
     if (String(it.method).startsWith("card:")) continue;
-    direct += it.amount; byMethod[it.method] = (byMethod[it.method] || 0) + it.amount; byCat[it.cat] = (byCat[it.cat] || 0) + it.amount;
+    direct += it.amount; byMethod[it.method] = (byMethod[it.method] || 0) + it.amount; byCatAll[it.cat] = (byCatAll[it.cat] || 0) + it.amount;
+    if (it.fromExtra) fromExtra += it.amount; else byCat[it.cat] = (byCat[it.cat] || 0) + it.amount;
   }
   const sched = cardSchedule(ym); let cards = 0, others = 0, noRate = false;
   for (const s of sched) {
     if (s.usd && !cardRate(s.cardId, ym)) noRate = true;
     if (s.who) { others += s.amt; continue; }
-    cards += s.amt; byCat[s.mov.cat] = (byCat[s.mov.cat] || 0) + s.amt;
+    cards += s.amt; byCatAll[s.mov.cat] = (byCatAll[s.mov.cat] || 0) + s.amt;
+    if (s.mov.fromExtra) fromExtra += s.amt; else byCat[s.mov.cat] = (byCat[s.mov.cat] || 0) + s.amt;
   }
   const owed = owedBy(sched).reduce((t, p) => t + p.pend, 0);
   byMethod.tarjetas = cards;
@@ -511,7 +513,7 @@ function stats(ym) {
     const a = acc(s.accId); if (!a) continue;
     if (a.cur === "USD") { if (s.ars) ahorro += s.ars; } else ahorro += s.amount;
   }
-  return {ing, ingBud, direct, cards, others, owed, noRate, ahorro, gastos: direct + cards, disp: ing - direct - cards - ahorro, byMethod, byCat, sched};
+  return {ing, ingBud, direct, cards, others, owed, noRate, ahorro, gastos: direct + cards, disp: ing - direct - cards - ahorro, byMethod, byCat, byCatAll, fromExtra, sched};
 }
 function pendingFixed(ym) {
   const items = S.months[ym] || [];
@@ -531,6 +533,28 @@ const gastoCats = () => S.cfg.cats.filter(c => c.t === "gasto");
 /* en qué mes pega un gasto en el presupuesto: el del día, o el del resumen si es con tarjeta */
 const budMonthOf = (method, date) => String(method).startsWith("card:") ? firstDue(card(method.slice(5)), date) : ymOf(date);
 
+/* ---------- ingresos extra ----------
+   Los ingresos que no cuentan en el presupuesto van a la categoría de ingreso extra y forman una "bolsita".
+   Un gasto marcado "salió de ingresos extra" se descuenta de ahí y no del presupuesto. */
+function extraCatId(create) {
+  const c = S.cfg.cats.find(x => x.id === "extra" && x.t === "ingreso") || S.cfg.cats.find(x => x.t === "ingreso" && /extra/i.test(x.n));
+  if (c) return c.id;
+  if (!create) return "";
+  S.cfg.cats = [...S.cfg.cats, {id: "extra", n: "Ingresos extra", i: "✨", t: "ingreso"}]; persist("config"); return "extra";
+}
+function extraLeft(skipId) {
+  let t = 0;
+  for (const it of allItems()) { if (it.id === skipId) continue; if (it.type === "ingreso" && it.noBud) t += it.amount; else if (it.type === "gasto" && it.fromExtra) t -= movArs(it); }
+  for (const q of quickList()) if (q.fromExtra && q.id !== skipId) t -= q.amount;
+  return t;
+}
+const hasExtras = () => allItems().some(it => (it.type === "ingreso" && it.noBud) || it.fromExtra);
+function extraCard() {
+  if (!hasExtras()) return "";
+  const left = extraLeft();
+  return `<div class="card"><h3>✨ Ingresos extra</h3><div class="tiles"><div class="tile"><span>Te quedan</span><b style="color:${left < 0 ? "var(--out)" : "var(--in)"}">${money(left)}</b></div></div>
+    <div class="note" style="margin-top:10px">Son los ingresos que no cuentan en el presupuesto. Al cargar un gasto, tildá "Salió de mis ingresos extra" para descontarlo de acá.</div></div>`;
+}
 /* ---------- render ---------- */
 function render() {
   $("#mLabel").textContent = mName(S.month);
@@ -579,6 +603,7 @@ function vInicio() {
   </div>
   ${alerts.join("")}
   ${budgetCard(M, st)}
+  ${extraCard()}
   ${!hasData ? `<div class="card"><h3>¡Arranquemos!</h3><div class="note">Tocá el <b>+</b> para cargar tu primer gasto o ingreso. Si usás tarjetas, agregalas en la pestaña <b>Tarjetas</b> con su fecha de cierre y vencimiento, así las cuotas caen en el mes correcto.</div></div>` : ""}
   <div class="card"><h3>Por medio de pago</h3><div class="tiles">
     <div class="tile"><span>💵 Efectivo</span><b style="color:var(--out)">${money(st.byMethod.efectivo)}</b></div>
@@ -596,7 +621,7 @@ function budgetCard(M, st) {
   const cats = gastoCats().filter(c => Number(b[c.id]) > 0);
   if (!cats.length) {
     const plan = M >= ymOf(todayStr()) ? `<div class="card"><h3>Presupuesto de ${mOnly(M)}</h3><div class="note">Como en tu Excel: cargá los ingresos del mes, repartilos por categoría y cada gasto que registres se va restando de su categoría.</div><button class="btn primary" data-act="budgets">Armar presupuesto</button></div>` : "";
-    return plan + `<div class="card"><h3>En qué se fue la plata <button class="link" data-act="budgets">Presupuesto</button></h3>${catBars(st.byCat, false)}</div>`;
+    return plan + `<div class="card"><h3>En qué se fue la plata <button class="link" data-act="budgets">Presupuesto</button></h3>${catBars(st.byCatAll, false)}</div>`;
   }
   let totB = 0, totS = 0;
   const rows = cats.map(c => {
@@ -610,6 +635,7 @@ function budgetCard(M, st) {
     ${own ? "" : `<div class="alert info">${from ? "Estás usando el presupuesto de " + mOnly(from) : "Estás usando tus topes generales"}<button data-act="budgets">Armar el de ${mOnly(M)}</button></div>`}
     <div class="tiles" style="margin-bottom:14px"><div class="tile"><span>Presupuestado</span><b>${money(totB)}</b></div><div class="tile"><span>Te queda</span><b style="color:${left < 0 ? "var(--out)" : "var(--in)"}">${money(left)}</b></div></div>
     <div class="bars">${rows}</div>
+    ${st.fromExtra > 0.004 ? `<div class="note" style="margin-top:10px">✨ Pagado con ingresos extra (no resta del presupuesto): <b>${money(st.fromExtra)}</b></div>` : ""}
     ${otros.length ? `<div class="lab">Gastos sin presupuesto · ${money(otrosT)}</div><div class="note">${otros.map(([id, v]) => esc(cat(id).i) + " " + esc(cat(id).n) + " " + money(v)).join(" · ")}</div>` : ""}
     <div class="note" style="margin-top:10px">Ingresos para el presupuesto: <b>${money(st.ingBud)}</b>${extra > 0.004 ? ` (aparte, ${money(extra)} de extras que no cuentan)` : ""}${st.ingBud ? ` · ${sinAsig >= 0 ? "sin asignar " + money(sinAsig) : "<span style=\"color:var(--out)\">presupuestaste " + money(-sinAsig) + " más de lo que entró</span>"}` : ` · todavía no cargaste ingresos`}</div>
   </div>`;
@@ -904,6 +930,7 @@ function movForm(it, onDone) {
       <div class="lab">¿De quién es el gasto?</div><div class="chips" id="whoChips">${[...new Set([...(S.cfg.people || []), ...(m.who ? [m.who] : [])])].reduce((h, p) => h + radio("who", p, esc(p), m.who || ""), radio("who", "", "🙋 Mío", m.who || ""))}${radio("who", "__new", "+ Otra persona", "")}</div>
       <label class="fld hidden" id="newWhoBox"><span>Nombre</span><input name="newWho" maxlength="30" placeholder="Ej: Lisandro, Mamá"></label>
     </div>
+    <label class="chk hidden" id="exChk"><input type="checkbox" name="fromExtra" ${m.fromExtra ? "checked" : ""}> <span>Salió de mis ingresos extra <small id="exLeft" style="color:var(--mute);font-weight:500"></small></span></label>
     <label class="chk hidden" id="budChk"><input type="checkbox" name="inBud" ${m.noBud ? "" : "checked"}> Contar este ingreso en el presupuesto del mes</label>
     <label class="fld"><span>Fecha</span><input type="date" name="date" value="${esc(m.date)}" required></label>
     <label class="fld"><span>Nota (opcional)</span><input name="note" value="${esc(m.note || "")}" maxlength="80" placeholder="Ej: compra en el chino, heladera…"></label>
@@ -913,11 +940,14 @@ function movForm(it, onDone) {
   const f = $("#f");
   const drawCats = () => { const t = val(f, "type"); const cur = f.elements.cat ? val(f, "cat") : m.cat; $("#catChips").innerHTML = S.cfg.cats.filter(c => c.t === t).map(c => radio("cat", c.id, esc(c.i) + " " + esc(c.n), cur)).join(""); };
   const drawMet = () => { const t = val(f, "type"); let cur = f.elements.method ? val(f, "method") : m.method; if (t === "ingreso" && String(cur).startsWith("card:")) cur = "debito"; $("#metChips").innerHTML = methodOptions(t, cur); if (!val(f, "method")) { const first = f.querySelector('input[name="method"]'); if (first) first.checked = true; } upd(); };
-  const upd = () => { $("#budChk").classList.toggle("hidden", val(f, "type") !== "ingreso"); const isCard = String(val(f, "method")).startsWith("card:"); $("#cuotasBox").classList.toggle("hidden", !isCard); const usd = isCard && val(f, "cur") === "USD"; $("#curSym").textContent = usd ? "US$" : "$"; $("#newWhoBox").classList.toggle("hidden", val(f, "who") !== "__new"); const n = Number(val(f, "cuotas")) || 1, a = parseAmt(val(f, "amount")); let info = ""; if (isCard) { const c = card(val(f, "method").slice(5)); if (n > 1 && a > 0) info = n + " cuotas de " + money(a / n, usd ? "USD" : "ARS") + ". "; if (c && val(f, "date")) info += "La primera cae en el resumen de " + mOnly(firstDue(c, val(f, "date"))) + "."; } $("#cuotaInfo").textContent = info; budHint(); };
+  const upd = () => { const isInc = val(f, "type") === "ingreso"; $("#budChk").classList.toggle("hidden", !isInc);
+    const showEx = !isInc && (hasExtras() || m.fromExtra); $("#exChk").classList.toggle("hidden", !showEx);
+    if (showEx) { const l = extraLeft(m.id); $("#exLeft").textContent = "· te quedan " + money(l); } const isCard = String(val(f, "method")).startsWith("card:"); $("#cuotasBox").classList.toggle("hidden", !isCard); const usd = isCard && val(f, "cur") === "USD"; $("#curSym").textContent = usd ? "US$" : "$"; $("#newWhoBox").classList.toggle("hidden", val(f, "who") !== "__new"); const n = Number(val(f, "cuotas")) || 1, a = parseAmt(val(f, "amount")); let info = ""; if (isCard) { const c = card(val(f, "method").slice(5)); if (n > 1 && a > 0) info = n + " cuotas de " + money(a / n, usd ? "USD" : "ARS") + ". "; if (c && val(f, "date")) info += "La primera cae en el resumen de " + mOnly(firstDue(c, val(f, "date"))) + "."; } $("#cuotaInfo").textContent = info; budHint(); };
   const budHint = () => {
     const box = $("#budInfo"), c = val(f, "cat"), date = val(f, "date"), method = val(f, "method");
     box.classList.add("hidden");
     if (val(f, "type") !== "gasto" || !c || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    if (f.elements.fromExtra.checked) { const l = extraLeft(m.id) - (parseAmt(val(f, "amount")) || 0); box.textContent = "No resta del presupuesto: sale de tus ingresos extra" + (parseAmt(val(f, "amount")) > 0 ? (l >= 0 ? ` · después te quedan ${money(l)}` : ` · te pasás por ${money(-l)}`) : ""); box.style.color = l < 0 ? "var(--out)" : ""; box.classList.remove("hidden"); return; }
     const isCard = String(method).startsWith("card:");
     if (isCard && (val(f, "cur") === "USD" || (val(f, "who") && val(f, "who") !== ""))) return;
     const ym = budMonthOf(method, date), bud = Number(budFor(ym).b[c]) || 0; if (!(bud > 0)) return;
@@ -929,7 +959,10 @@ function movForm(it, onDone) {
     box.textContent = t; box.style.color = after < 0 ? "var(--out)" : ""; box.classList.remove("hidden");
   };
   drawCats(); drawMet();
-  f.addEventListener("change", e => { if (e.target.name === "type") { drawCats(); drawMet(); } else upd(); });
+  f.addEventListener("change", e => {
+    if (e.target.name === "type") { drawCats(); drawMet(); return; }
+    if (e.target.name === "inBud" && !e.target.checked) { const id = extraCatId(true); drawCats(); const r = f.querySelector(`input[name="cat"][value="${id}"]`); if (r) r.checked = true; }
+    upd(); });
   f.elements.amount.addEventListener("input", upd);
   if (isNew) setTimeout(() => f.elements.amount.focus(), 250);
   f.onsubmit = e => {
@@ -941,7 +974,8 @@ function movForm(it, onDone) {
     const method = val(f, "method"), isCard = method.startsWith("card:");
     const nm = {id: m.id || gid(), ts: m.ts || Date.now(), type: val(f, "type"), amount, date, cat: val(f, "cat"), method, cuotas: isCard ? Number(val(f, "cuotas")) || 1 : 1, note: val(f, "note").trim()};
     if (m.fixedId) nm.fixedId = m.fixedId;
-    if (nm.type === "ingreso" && !f.elements.inBud.checked) nm.noBud = true;
+    if (nm.type === "ingreso" && !f.elements.inBud.checked) { nm.noBud = true; nm.cat = extraCatId(true); }
+    if (nm.type === "gasto" && f.elements.fromExtra.checked) nm.fromExtra = true;
     if (isCard) {
       if (val(f, "cur") === "USD") nm.cur = "USD";
       let who = val(f, "who");
@@ -955,7 +989,8 @@ function movForm(it, onDone) {
     upsertMov(nm, it && !it._new ? it : null);
     closeSheet();
     let msg = isNew ? "Listo, guardado" : "Cambios guardados";
-    if (nm.type === "gasto" && !nm.who && !nm.cur) { const ym = budMonthOf(nm.method, nm.date), bud = Number(budFor(ym).b[nm.cat]) || 0; if (bud > 0) { const left = bud - (stats(ym).byCat[nm.cat] || 0); msg += left >= 0 ? ` · te quedan ${money(left)} en ${cat(nm.cat).n}` : ` · te pasaste ${money(-left)} en ${cat(nm.cat).n}`; } }
+    if (nm.type === "gasto" && nm.fromExtra) { const l = extraLeft(); msg += l >= 0 ? ` · te quedan ${money(l)} de ingresos extra` : ` · te pasaste ${money(-l)} de tus ingresos extra`; }
+    else if (nm.type === "gasto" && !nm.who && !nm.cur) { const ym = budMonthOf(nm.method, nm.date), bud = Number(budFor(ym).b[nm.cat]) || 0; if (bud > 0) { const left = bud - (stats(ym).byCat[nm.cat] || 0); msg += left >= 0 ? ` · te quedan ${money(left)} en ${cat(nm.cat).n}` : ` · te pasaste ${money(-left)} en ${cat(nm.cat).n}`; } }
     toast(msg);
     if (isNew && ymOf(date) !== S.month) { S.month = ymOf(date); }
     render();
@@ -988,6 +1023,7 @@ function quickForm(q) {
     <label class="fld"><span>Detalle</span><input name="note" value="${esc(q.note || "")}" maxlength="80" placeholder="Ej: café, kiosco, nafta…"></label>
     <label class="fld"><span>Categoría</span><select name="cat"><option value="">Elegí una categoría</option>${opts}</select></label>
     <label class="fld"><span>Medio de pago</span><select name="method">${quickMethodOpts(q.method || "efectivo")}</select></label>
+    ${hasExtras() || q.fromExtra ? `<label class="chk"><input type="checkbox" name="fromExtra" ${q.fromExtra ? "checked" : ""}> <span>Salió de mis ingresos extra <small style="color:var(--mute);font-weight:500">· te quedan ${money(extraLeft(q.id))}</small></span></label>` : ""}
     <button class="btn primary" type="submit">Guardar</button>
     ${isNew ? `<button class="btn ghost" type="button" id="qMore">Guardar y anotar otro</button>` : `<button type="button" class="btn danger" id="delBtn">Eliminar</button>`}
   </form>`);
@@ -998,6 +1034,7 @@ function quickForm(q) {
     if (!(amount > 0)) { toast("Poné un importe válido"); return; }
     if (!val(f, "cat")) { toast("Elegí una categoría"); return; }
     const nq = {id: q.id || gid(), ts: q.ts || Date.now(), date: q.date, amount, note: val(f, "note").trim(), cat: val(f, "cat"), method: val(f, "method") || "efectivo"};
+    if (f.elements.fromExtra && f.elements.fromExtra.checked) nq.fromExtra = true;
     try { localStorage.setItem(LS + "-qmet", nq.method); } catch (e) {}
     const list = quickList();
     S.cfg.quick = isNew ? [...list, nq] : list.map(x => x.id === nq.id ? nq : x);
@@ -1019,7 +1056,7 @@ function passQuickForm() {
     for (const q of list) {
       let method = q.method || "efectivo"; if (method.startsWith("card:") && !card(method.slice(5))) method = "efectivo";
       const y = ymOf(q.date);
-      const nm = {id: gid(), ts: q.ts || Date.now(), type: "gasto", amount: q.amount, date: q.date, cat: q.cat, method, cuotas: 1, note: q.note || ""};
+      const nm = {id: gid(), ts: q.ts || Date.now(), type: "gasto", amount: q.amount, date: q.date, cat: q.cat, method, cuotas: 1, note: q.note || ""}; if (q.fromExtra) nm.fromExtra = true;
       S.months[y] = [...(S.months[y] || []), nm].sort((a, b) => a.date.localeCompare(b.date)); months.add(y);
     }
     months.forEach(saveMonth);
@@ -1142,7 +1179,7 @@ function budgetsForm(draft) {
     $("#bsum").innerHTML = `Ingresos que cuentan <b>${money(st.ingBud)}</b> · Presupuestado <b>${money(tot)}</b><br>${st.ingBud ? (rest >= 0 ? `Sin asignar: <b style="color:var(--in)">${money(rest)}</b>` : `Te pasás de tus ingresos por <b style="color:var(--out)">${money(-rest)}</b>`) : "Cargá tus ingresos para ver cuánto te queda por repartir"}`; };
   sum(); f.addEventListener("input", sum);
   document.querySelectorAll(".incTog").forEach(b => b.onclick = () => { const it = findMov(b.dataset.id); if (!it) return; const d = read(), sc = $("#sheetBody").scrollTop;
-    const nm = {...it}; if (it.noBud) delete nm.noBud; else nm.noBud = true; upsertMov(nm, it); render(); budgetsForm(d); $("#sheetBody").scrollTop = sc; });
+    const nm = {...it}; if (it.noBud) delete nm.noBud; else { nm.noBud = true; nm.cat = extraCatId(true); } upsertMov(nm, it); render(); budgetsForm(d); $("#sheetBody").scrollTop = sc; });
   $("#addInc").onclick = () => { const d = read(); const first = S.cfg.cats.find(c => c.t === "ingreso");
     movForm({type: "ingreso", amount: "", date: defDate(), cat: first ? first.id : "", method: "debito", cuotas: 1, note: "", _new: true}, () => budgetsForm(d));
     $("#sheetIn h2").textContent = "Nuevo ingreso"; };
