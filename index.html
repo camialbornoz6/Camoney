@@ -334,8 +334,8 @@ function listen(fromFb) {
   let first = true;
   const timer = setTimeout(() => {
     if (S.ready && !fromFb) return;
-    banner("Todavía no pude conectar con tus datos. Revisá la conexión… (v17)");
-    if (fromFb && db) db.collection(base).get({source: "server"}).then(() => banner("Conecté, pero tardó. Cerrá y abrí la app de nuevo. (v17)"), e => banner("No pude conectar (v17): " + ((e && e.code) || "") + " — " + ((e && e.message) || String(e)).slice(0, 180)));
+    banner("Todavía no pude conectar con tus datos. Revisá la conexión… (v18)");
+    if (fromFb && db) db.collection(base).get({source: "server"}).then(() => banner("Conecté, pero tardó. Cerrá y abrí la app de nuevo. (v18)"), e => banner("No pude conectar (v18): " + ((e && e.code) || "") + " — " + ((e && e.message) || String(e)).slice(0, 180)));
   }, 8000);
   unsub = db.collection(base).onSnapshot(snap => {
     let cfg = null; const months = {}; let sav = [];
@@ -962,12 +962,15 @@ function quickCard() {
   const list = quickList(); if (!list.length) return "";
   const tot = list.reduce((t, q) => t + q.amount, 0);
   return `<div class="card"><h3>⚡ Gastos rápidos sin pasar <span style="color:var(--out)">${money(tot)}</span></h3>
-    ${list.slice().sort((a, b) => a.date.localeCompare(b.date)).map(q => `<button class="item" data-act="editQuick" data-id="${esc(q.id)}"><div class="ico">${esc(cat(q.cat).i)}</div><div class="mid"><b>${esc(q.note || cat(q.cat).n)}</b><small>${esc((q.note ? cat(q.cat).n + " · " : "") + (q.date === todayStr() ? "hoy" : dayLabel(q.date)))}</small></div><div class="amt out">−${money(q.amount)}</div></button>`).join("")}
+    ${list.slice().sort((a, b) => a.date.localeCompare(b.date)).map(q => `<button class="item" data-act="editQuick" data-id="${esc(q.id)}"><div class="ico">${esc(cat(q.cat).i)}</div><div class="mid"><b>${esc(q.note || cat(q.cat).n)}</b><small>${esc((q.note ? cat(q.cat).n + " · " : "") + methodLabel(q.method || "efectivo") + " · " + (q.date === todayStr() ? "hoy" : dayLabel(q.date)))}</small></div><div class="amt out">−${money(q.amount)}</div></button>`).join("")}
     <button class="btn primary" data-act="passQuick">Pasar a gastos</button>
     <div class="note" style="margin-top:8px">Todavía no cuentan en el mes: se suman cuando los pasás.</div></div>`;
 }
+const quickMethodOpts = cur => BASE_METHODS.map(m => `<option value="${m.id}" ${m.id === cur ? "selected" : ""}>${m.i} ${m.n}</option>`).join("") + S.cfg.cards.map(c => `<option value="card:${esc(c.id)}" ${"card:" + c.id === cur ? "selected" : ""}>💳 ${esc(c.name)}</option>`).join("");
+/* el último medio de pago usado queda elegido para el próximo gasto rápido */
+function lastQuickMethod() { let m = ""; try { m = localStorage.getItem(LS + "-qmet") || ""; } catch (e) {} return m === "efectivo" || BASE_METHODS.some(x => x.id === m) || (m.startsWith("card:") && card(m.slice(5))) ? m : "efectivo"; }
 function quickForm(q) {
-  const isNew = !q; q = q || {date: todayStr(), amount: "", note: "", cat: ""};
+  const isNew = !q; q = q || {date: todayStr(), amount: "", note: "", cat: "", method: lastQuickMethod()};
   const opts = gastoCats().map(c => `<option value="${esc(c.id)}" ${c.id === q.cat ? "selected" : ""}>${esc(c.i)} ${esc(c.n)}</option>`).join("");
   openSheet(`<h2>${isNew ? "Registro rápido de gasto" : "Editar gasto rápido"}</h2>
   <div class="note" style="margin-bottom:10px">📅 ${q.date === todayStr() ? "Hoy, " : ""}${esc(dayLabel(q.date))}</div>
@@ -975,6 +978,7 @@ function quickForm(q) {
     <div class="bigin"><span>$</span><input name="amount" inputmode="decimal" placeholder="0" value="${q.amount !== "" ? numIn(q.amount) : ""}"></div>
     <label class="fld"><span>Detalle</span><input name="note" value="${esc(q.note || "")}" maxlength="80" placeholder="Ej: café, kiosco, nafta…"></label>
     <label class="fld"><span>Categoría</span><select name="cat"><option value="">Elegí una categoría</option>${opts}</select></label>
+    <label class="fld"><span>Medio de pago</span><select name="method">${quickMethodOpts(q.method || "efectivo")}</select></label>
     <button class="btn primary" type="submit">Guardar</button>
     ${isNew ? `<button class="btn ghost" type="button" id="qMore">Guardar y anotar otro</button>` : `<button type="button" class="btn danger" id="delBtn">Eliminar</button>`}
   </form>`);
@@ -984,7 +988,8 @@ function quickForm(q) {
     const amount = parseAmt(val(f, "amount"));
     if (!(amount > 0)) { toast("Poné un importe válido"); return; }
     if (!val(f, "cat")) { toast("Elegí una categoría"); return; }
-    const nq = {id: q.id || gid(), ts: q.ts || Date.now(), date: q.date, amount, note: val(f, "note").trim(), cat: val(f, "cat")};
+    const nq = {id: q.id || gid(), ts: q.ts || Date.now(), date: q.date, amount, note: val(f, "note").trim(), cat: val(f, "cat"), method: val(f, "method") || "efectivo"};
+    try { localStorage.setItem(LS + "-qmet", nq.method); } catch (e) {}
     const list = quickList();
     S.cfg.quick = isNew ? [...list, nq] : list.map(x => x.id === nq.id ? nq : x);
     persist("config"); render();
@@ -996,21 +1001,15 @@ function quickForm(q) {
 }
 function passQuickForm() {
   const list = quickList().slice().sort((a, b) => a.date.localeCompare(b.date)); if (!list.length) { closeSheet(); return; }
-  const mopts = cur => BASE_METHODS.map(m => `<option value="${m.id}" ${m.id === cur ? "selected" : ""}>${m.i} ${m.n}</option>`).join("") + S.cfg.cards.map(c => `<option value="card:${esc(c.id)}">💳 ${esc(c.name)}</option>`).join("");
   openSheet(`<h2>Pasar a gastos</h2>
-  <div class="note" style="margin-bottom:6px">Cada uno se suma como gasto en su categoría. Elegí con qué lo pagaste.</div>
-  <form id="pf">
-    <label class="fld"><span>Medio de pago para todos</span><select id="pAll">${mopts("efectivo")}</select></label>
-    <div style="margin-top:8px">${list.map(q => `<div class="qrow"><div class="ico">${esc(cat(q.cat).i)}</div><div class="mid"><b>${esc(q.note || cat(q.cat).n)} · ${money(q.amount)}</b><small>${esc(cat(q.cat).n)} · ${esc(q.date === todayStr() ? "hoy" : dayLabel(q.date))}</small><select name="m_${esc(q.id)}">${mopts("efectivo")}</select></div></div>`).join("")}</div>
-    <button class="btn primary" type="submit">Pasar ${list.length} gasto${list.length > 1 ? "s" : ""} (${money(list.reduce((t, q) => t + q.amount, 0))})</button>
-  </form>`);
-  const f = $("#pf");
-  $("#pAll").onchange = e => f.querySelectorAll('select[name^="m_"]').forEach(s => { s.value = e.target.value; });
-  f.onsubmit = e => {
-    e.preventDefault();
+  <div class="note" style="margin-bottom:6px">Cada uno se suma como gasto en su categoría y con el medio de pago que elegiste.</div>
+  <div style="margin-top:8px">${list.map(q => `<div class="qrow"><div class="ico">${esc(cat(q.cat).i)}</div><div class="mid"><b>${esc(q.note || cat(q.cat).n)}</b><small>${esc(cat(q.cat).n + " · " + methodLabel(q.method || "efectivo") + " · " + (q.date === todayStr() ? "hoy" : dayLabel(q.date)))}</small></div><div class="amt out">−${money(q.amount)}</div></div>`).join("")}</div>
+  <button class="btn primary" id="pGo">Pasar ${list.length} gasto${list.length > 1 ? "s" : ""} (${money(list.reduce((t, q) => t + q.amount, 0))})</button>`);
+  $("#pGo").onclick = () => {
     const months = new Set();
     for (const q of list) {
-      const method = val(f, "m_" + q.id) || "efectivo", y = ymOf(q.date);
+      let method = q.method || "efectivo"; if (method.startsWith("card:") && !card(method.slice(5))) method = "efectivo";
+      const y = ymOf(q.date);
       const nm = {id: gid(), ts: q.ts || Date.now(), type: "gasto", amount: q.amount, date: q.date, cat: q.cat, method, cuotas: 1, note: q.note || ""};
       S.months[y] = [...(S.months[y] || []), nm].sort((a, b) => a.date.localeCompare(b.date)); months.add(y);
     }
