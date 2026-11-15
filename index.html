@@ -194,7 +194,7 @@ nav.tabs button.on{color:var(--acc)}
 body.auth nav.tabs,body.auth #fab,body.auth .mswitch{display:none!important}
 .loading{text-align:center;color:var(--mute);padding:60px 0}
 .qbar{display:flex;justify-content:flex-end;margin:-4px 0 10px}
-.qbtn{border:1px solid var(--acc);background:var(--acc-soft);color:var(--acc);border-radius:99px;padding:8px 14px;font-size:13px;font-weight:700}
+.qbtn{border:1px solid #FF9F43;background:#3A2410;color:#FFB066;border-radius:99px;padding:10px 17px;font-size:15px;font-weight:700}
 .qrow{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line)}
 .qrow:first-of-type{border-top:0}
 .qrow .mid{flex:1;min-width:0}.qrow .mid b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.qrow small{color:var(--mute);font-size:12px}
@@ -334,8 +334,8 @@ function listen(fromFb) {
   let first = true;
   const timer = setTimeout(() => {
     if (S.ready && !fromFb) return;
-    banner("Todavía no pude conectar con tus datos. Revisá la conexión… (v18)");
-    if (fromFb && db) db.collection(base).get({source: "server"}).then(() => banner("Conecté, pero tardó. Cerrá y abrí la app de nuevo. (v18)"), e => banner("No pude conectar (v18): " + ((e && e.code) || "") + " — " + ((e && e.message) || String(e)).slice(0, 180)));
+    banner("Todavía no pude conectar con tus datos. Revisá la conexión… (v19)");
+    if (fromFb && db) db.collection(base).get({source: "server"}).then(() => banner("Conecté, pero tardó. Cerrá y abrí la app de nuevo. (v19)"), e => banner("No pude conectar (v19): " + ((e && e.code) || "") + " — " + ((e && e.message) || String(e)).slice(0, 180)));
   }, 8000);
   unsub = db.collection(base).onSnapshot(snap => {
     let cfg = null; const months = {}; let sav = [];
