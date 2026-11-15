@@ -640,35 +640,100 @@ function vHist() {
   return html;
 }
 const fmtDate = d => { if (!d) return ""; const [y, m, dd] = d.split("-"); return dd + "/" + m + "/" + y; };
+/* deudas: el saldo es el total menos los pagos registrados */
+const debtCur = d => d.cur === "USD" ? "USD" : "ARS";
+const debtPaidAmt = d => (d.payments || []).reduce((t, p) => t + (Number(p.amount) || 0), 0);
+const debtLeft = d => Math.max(0, (Number(d.amount) || 0) - debtPaidAmt(d));
+const debtDone = d => !!d.paid || debtLeft(d) <= 0.004;
+const findDebt = id => (S.cfg.debts || []).find(x => x.id === id);
+function saveDebt(nd) { const list = S.cfg.debts || []; S.cfg.debts = list.some(x => x.id === nd.id) ? list.map(x => x.id === nd.id ? nd : x) : [...list, nd]; persist("config"); }
+function debtTotals(list) { let ars = 0, usd = 0; for (const d of list) { if (debtDone(d)) continue; if (debtCur(d) === "USD") usd += debtLeft(d); else ars += debtLeft(d); } return {ars, usd}; }
+function debtTotLabel(t) { const a = []; if (t.ars > 0.004) a.push(money(t.ars)); if (t.usd > 0.004) a.push(money(t.usd, "USD")); return a.join(" + "); }
 function debtRow(d) {
-  return `<button class="item debt${d.paid ? " paid" : ""}" data-act="editDebt" data-id="${esc(d.id)}"><div class="ico">${d.paid ? "✅" : "🧾"}</div><div class="mid"><b>${esc(d.who)}</b><small>${d.date ? fmtDate(d.date) : "Sin fecha"}${d.note ? " · " + esc(d.note) : ""}</small></div><div class="amt" style="color:${d.paid ? "var(--mute)" : "var(--out)"}">${money(d.amount)}</div></button>`;
+  const cur = debtCur(d), done = debtDone(d), paidAmt = debtPaidAmt(d), left = debtLeft(d), late = !done && d.due && d.due < todayStr();
+  const sub = [];
+  if (d.cuotas > 1) sub.push((d.payments || []).length + " de " + d.cuotas + " cuotas" + (d.cuotaAmt ? " de " + money(d.cuotaAmt, cur) : ""));
+  if (d.due) sub.push(late ? `<span style="color:var(--out)">venció el ${fmtDate(d.due)}</span>` : (done ? "plazo " : "vence el ") + fmtDate(d.due));
+  else if (d.date) sub.push(fmtDate(d.date));
+  if (d.note) sub.push(esc(d.note));
+  const p = d.amount > 0 ? Math.min(100, paidAmt / d.amount * 100) : 0;
+  return `<button class="item debt${done ? " paid" : ""}" data-act="viewDebt" data-id="${esc(d.id)}" style="flex-wrap:wrap"><div class="ico">${done ? "✅" : "🧾"}</div><div class="mid"><b>${esc(d.who)}${cur === "USD" ? '<span class="tg" style="background:var(--acc-soft)">USD</span>' : ""}</b><small>${sub.join(" · ")}</small></div><div style="text-align:right"><div class="amt" style="color:${done ? "var(--mute)" : "var(--out)"}">${money(done ? d.amount : left, cur)}</div>${!done && paidAmt > 0 ? `<small style="color:var(--mute);font-size:11px">de ${money(d.amount, cur)}</small>` : ""}</div>${!done && paidAmt > 0 ? `<div class="track" style="width:100%;margin-top:4px"><div class="fill" style="width:${p.toFixed(1)}%;background:var(--in)"></div></div>` : ""}</button>`;
 }
 function vDeudas() {
-  const all = S.cfg.debts || [], pend = all.filter(d => !d.paid).sort((a, b) => (a.date || "9") < (b.date || "9") ? -1 : 1), paid = all.filter(d => d.paid).sort((a, b) => (b.date || "") < (a.date || "") ? -1 : 1);
-  const tot = pend.reduce((t, d) => t + d.amount, 0);
+  const all = S.cfg.debts || [], pend = all.filter(d => !debtDone(d)).sort((a, b) => (a.due || a.date || "9") < (b.due || b.date || "9") ? -1 : 1), paid = all.filter(debtDone).sort((a, b) => (b.date || "") < (a.date || "") ? -1 : 1);
+  const t = debtTotals(all);
   let html = `<button class="back" data-act="tab" data-v="mas">‹ Volver</button>`;
   html += `<div class="card"><h3>Deudas <button class="link" data-act="newDebt">+ Agregar</button></h3>
-    <div class="tiles"><div class="tile"><span>Total que debés</span><b style="color:var(--out)">${money(tot)}</b></div><div class="tile"><span>Pendientes</span><b>${pend.length}</b></div></div></div>`;
+    <div class="tiles"><div class="tile"><span>Te falta pagar</span><b style="color:var(--out);display:block">${money(t.ars)}</b>${t.usd > 0.004 ? `<b style="color:var(--out);display:block">${money(t.usd, "USD")}</b>` : ""}</div><div class="tile"><span>Pendientes</span><b>${pend.length}</b></div></div></div>`;
   if (!all.length) return html + `<div class="empty">Todavía no cargaste deudas. Tocá "+ Agregar" para anotar a quién le debés.</div>`;
   html += pend.length ? pend.map(debtRow).join("") : `<div class="empty">No tenés deudas pendientes 🎉</div>`;
   if (paid.length) html += `<div class="hyear" style="font-size:14px">Pagadas<small>${paid.length}</small></div>` + paid.map(debtRow).join("");
   return html;
 }
+function debtView(d) {
+  const cur = debtCur(d), done = debtDone(d), left = debtLeft(d), paidAmt = debtPaidAmt(d), pays = (d.payments || []).slice().sort((a, b) => b.date.localeCompare(a.date));
+  const p = d.amount > 0 ? Math.min(100, paidAmt / d.amount * 100) : 0, late = !done && d.due && d.due < todayStr();
+  const info = [];
+  if (d.cuotas > 1) info.push(`<div class="tile"><span>Cuotas</span><b>${pays.length} de ${d.cuotas}</b></div>`, `<div class="tile"><span>Importe de cada cuota</span><b>${d.cuotaAmt ? money(d.cuotaAmt, cur) : "—"}</b></div>`);
+  info.push(`<div class="tile"><span>Plazo</span><b style="${late ? "color:var(--out)" : ""}">${d.due ? fmtDate(d.due) + (late ? " · vencida" : "") : "Sin plazo"}</b></div>`, `<div class="tile"><span>Moneda</span><b>${cur === "USD" ? "Dólares" : "Pesos"}</b></div>`);
+  openSheet(`<h2>${esc(d.who)}</h2>
+    <div class="card hero" style="margin-bottom:12px"><div class="lbl">${done ? "Deuda saldada" : "Te falta pagar"}</div><div class="big">${money(done ? 0 : left, cur)}</div>
+      <div class="track" style="background:rgba(26,15,51,.15)"><div class="fill" style="width:${p.toFixed(1)}%;background:var(--on-acc)"></div></div>
+      <div class="grid" style="margin-top:12px"><div>Total de la deuda<b>${money(d.amount, cur)}</b></div><div>Ya pagaste<b>${money(paidAmt, cur)}</b></div></div></div>
+    <div class="tiles">${info.join("")}</div>
+    ${d.note ? `<div class="note" style="margin-top:10px">${esc(d.note)}</div>` : ""}
+    ${done ? "" : `<button class="btn primary" id="payBtn">Registrar un pago</button>`}
+    <div class="lab">Pagos</div>
+    ${pays.length ? pays.map(x => `<div class="fix"><div class="ico">💸</div><div class="mid"><b>${money(x.amount, cur)}</b><small>${fmtDate(x.date)}${x.note ? " · " + esc(x.note) : ""}</small></div><button class="mini" data-pay="${esc(x.id)}">Borrar</button></div>`).join("") : `<div class="empty" style="padding:8px 4px">Todavía no registraste pagos.</div>`}
+    <button class="btn ghost" id="editBtn">Editar deuda</button>`);
+  const pb = $("#payBtn"); if (pb) pb.onclick = () => debtPayForm(d);
+  $("#editBtn").onclick = () => debtForm(d);
+  document.querySelectorAll("[data-pay]").forEach(b => twoTap(b, () => { const nd = {...d, payments: (d.payments || []).filter(x => x.id !== b.dataset.pay)}; saveDebt(nd); toast("Pago borrado"); render(); debtView(nd); }));
+}
+function debtPayForm(d) {
+  const cur = debtCur(d), left = debtLeft(d), sug = d.cuotaAmt ? Math.min(d.cuotaAmt, left) : left;
+  openSheet(`<h2>Pago a ${esc(d.who)}</h2><form id="f">
+    <div class="bigin"><span>${cur === "USD" ? "US$" : "$"}</span><input name="amount" inputmode="decimal" placeholder="0" value="${sug > 0 ? numIn(Math.round(sug * 100) / 100) : ""}"></div>
+    <div class="note">Te falta pagar ${money(left, cur)}${d.cuotas > 1 ? ` · esta sería la cuota ${(d.payments || []).length + 1} de ${d.cuotas}` : ""}.</div>
+    <label class="fld"><span>Fecha del pago</span><input type="date" name="date" value="${todayStr()}" required></label>
+    <label class="fld"><span>Nota (opcional)</span><input name="note" maxlength="60" placeholder="Ej: transferencia, efectivo"></label>
+    <div class="hint" id="payInfo"></div>
+    <button class="btn primary">Guardar pago</button><button type="button" class="btn ghost" id="backBtn">Volver</button></form>`);
+  const f = $("#f");
+  const upd = () => { const a = parseAmt(val(f, "amount")); $("#payInfo").textContent = a > 0 ? (a >= left - 0.004 ? "Con este pago saldás la deuda 🎉" : "Después de este pago te quedan " + money(left - a, cur)) : ""; };
+  upd(); f.elements.amount.addEventListener("input", upd);
+  $("#backBtn").onclick = () => debtView(d);
+  f.onsubmit = e => { e.preventDefault(); const a = parseAmt(val(f, "amount")); if (!(a > 0)) { toast("Poné un monto válido"); return; }
+    const date = val(f, "date"); if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { toast("Poné la fecha del pago"); return; }
+    if (a > left + 0.004) { toast("Es más de lo que te falta pagar (" + money(left, cur) + ")"); return; }
+    const nd = {...d, payments: [...(d.payments || []), {id: gid(), date, amount: a, note: val(f, "note").trim()}]};
+    saveDebt(nd); toast(debtLeft(nd) <= 0.004 ? "¡Deuda saldada!" : "Pago guardado · te quedan " + money(debtLeft(nd), cur)); render(); debtView(nd); };
+}
 function debtForm(d) {
-  const isNew = !d; d = d || {who: "", amount: "", date: todayStr(), note: "", paid: false};
+  const isNew = !d; d = d || {who: "", amount: "", date: todayStr(), note: "", paid: false, cur: "ARS", due: "", cuotas: 1, cuotaAmt: ""};
   openSheet(`<h2>${isNew ? "Nueva deuda" : "Editar deuda"}</h2><form id="f">
-    <label class="fld"><span>Importe</span><input name="amount" inputmode="decimal" value="${d.amount ? numIn(d.amount) : ""}" placeholder="0" required></label>
+    <div class="seg">${radio("cur", "ARS", "Pesos", debtCur(d))}${radio("cur", "USD", "Dólares", debtCur(d))}</div>
+    <label class="fld"><span>Importe total</span><input name="amount" inputmode="decimal" value="${d.amount ? numIn(d.amount) : ""}" placeholder="0" required></label>
     <label class="fld"><span>A quién le debés</span><input name="who" value="${esc(d.who)}" placeholder="Ej: Mamá, Juli, el banco" maxlength="40" required></label>
-    <label class="fld"><span>Fecha</span><input type="date" name="date" value="${esc(d.date || "")}"></label>
-    <label class="fld"><span>Comentarios (opcional)</span><textarea name="note" maxlength="200" placeholder="Ej: me prestó para el alquiler, le devuelvo en 2 cuotas">${esc(d.note || "")}</textarea></label>
-    ${isNew ? "" : `<label class="chk"><input type="checkbox" name="paid" ${d.paid ? "checked" : ""}> Ya la pagué</label>`}
+    <div class="two"><label class="fld"><span>Fecha</span><input type="date" name="date" value="${esc(d.date || "")}"></label>
+    <label class="fld"><span>Plazo de pago</span><input type="date" name="due" value="${esc(d.due || "")}"></label></div>
+    <div class="two"><label class="fld"><span>Cuotas</span><input name="cuotas" inputmode="numeric" value="${d.cuotas > 1 ? d.cuotas : ""}" placeholder="1"></label>
+    <label class="fld"><span>Importe de cada cuota</span><input name="cuotaAmt" inputmode="decimal" value="${d.cuotaAmt ? numIn(d.cuotaAmt) : ""}" placeholder="—"></label></div>
+    <div class="hint" id="cuoInfo"></div>
+    <label class="fld"><span>Comentarios (opcional)</span><textarea name="note" maxlength="200" placeholder="Ej: me prestó para el alquiler">${esc(d.note || "")}</textarea></label>
+    ${isNew ? "" : `<label class="chk"><input type="checkbox" name="paid" ${d.paid ? "checked" : ""}> Marcarla como pagada</label>`}
     <button class="btn primary">Guardar</button>${isNew ? "" : `<button type="button" class="btn danger" id="delBtn">Eliminar deuda</button>`}</form>`);
   const f = $("#f");
+  const nCuo = () => Math.max(1, Math.min(120, parseInt(val(f, "cuotas"), 10) || 1));
+  const upd = () => { const a = parseAmt(val(f, "amount")), n = nCuo(), ca = parseAmt(val(f, "cuotaAmt")), sym = val(f, "cur");
+    f.elements.cuotaAmt.placeholder = n > 1 && a > 0 ? numIn(Math.round(a / n * 100) / 100) : "—";
+    $("#cuoInfo").textContent = n > 1 && a > 0 ? (ca > 0 ? n + " cuotas de " + money(ca, sym) + " = " + money(ca * n, sym) + (Math.abs(ca * n - a) > 0.5 ? " (el total cargado es " + money(a, sym) + ")" : "") : "Si lo dejás vacío, cada cuota es de " + money(a / n, sym)) : ""; };
+  upd(); f.addEventListener("input", upd); f.addEventListener("change", upd);
   f.onsubmit = e => { e.preventDefault(); const amt = parseAmt(val(f, "amount")); if (!(amt > 0)) { toast("Poné un monto válido"); return; }
     const who = val(f, "who").trim(); if (!who) { toast("Poné a quién le debés"); return; }
-    const nd = {id: d.id || gid(), who, amount: amt, date: val(f, "date"), note: val(f, "note").trim(), paid: !isNew && f.elements.paid.checked};
-    const list = S.cfg.debts || [];
-    S.cfg.debts = isNew ? [...list, nd] : list.map(x => x.id === nd.id ? nd : x); persist("config"); closeSheet(); toast("Deuda guardada"); render(); };
+    const n = nCuo(), ca = parseAmt(val(f, "cuotaAmt"));
+    const nd = {...d, id: d.id || gid(), who, amount: amt, cur: val(f, "cur"), date: val(f, "date"), due: val(f, "due"), cuotas: n, cuotaAmt: n > 1 ? (ca > 0 ? ca : Math.round(amt / n * 100) / 100) : 0, note: val(f, "note").trim(), paid: !isNew && f.elements.paid.checked, payments: d.payments || []};
+    saveDebt(nd); toast("Deuda guardada"); render(); debtView(nd); };
   if (!isNew) twoTap($("#delBtn"), () => { S.cfg.debts = (S.cfg.debts || []).filter(x => x.id !== d.id); persist("config"); closeSheet(); render(); });
 }
 function vMas() {
@@ -681,7 +746,7 @@ function vMas() {
   }
   fx += `</div>`;
   return fx + `<div class="card menu">
-    <button data-act="tab" data-v="deudas"><span>🧾</span><span>Deudas</span><span>${(S.cfg.debts || []).filter(d => !d.paid).length ? money((S.cfg.debts || []).filter(d => !d.paid).reduce((t, d) => t + d.amount, 0)) : ""}</span></button>
+    <button data-act="tab" data-v="deudas"><span>🧾</span><span>Deudas</span><span>${debtTotLabel(debtTotals(S.cfg.debts || []))}</span></button>
     <button data-act="tab" data-v="hist"><span>🗓️</span><span>Historial de meses</span><span></span></button>
     <button data-act="budgets"><span>📊</span><span>Presupuesto de ${mOnly(M)}</span><span>${(S.cfg.mbudgets || {})[M] ? money(Object.values(budFor(M).b).reduce((t, v) => t + (Number(v) || 0), 0)) : "Sin armar"}</span></button>
     <button data-act="weekly"><span>🛒</span><span>Comida por semana</span><span>${S.cfg.weekly && S.cfg.weekly.amount ? money(S.cfg.weekly.amount) : "Sin usar"}</span></button>
@@ -1061,6 +1126,7 @@ document.addEventListener("click", e => {
     case "tab": S.tab = el.dataset.v; window.scrollTo(0, 0); render(); break;
     case "newDebt": debtForm(); break;
     case "editDebt": { const d = (S.cfg.debts || []).find(x => x.id === id); if (d) debtForm(d); break; }
+    case "viewDebt": { const d = findDebt(id); if (d) debtView(d); break; }
     case "togglePaid": { const k = paidKey(id, S.month, el.dataset.who), p = {...(S.cfg.paid || {})}; if (p[k]) delete p[k]; else p[k] = true; S.cfg.paid = p; persist("config"); render(); break; }
     case "cardUsd": cardUsdForm(id); break;
     case "weekly": weeklyForm(); break;
