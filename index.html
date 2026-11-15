@@ -939,7 +939,7 @@ function movForm(it, onDone) {
     <div class="seg">${radio("type", "gasto", "Gasto", m.type)}${radio("type", "ingreso", "Ingreso", m.type)}</div>
     <div class="bigin"><span id="curSym">$</span><input name="amount" inputmode="decimal" placeholder="0" value="${m.amount !== "" ? numIn(m.amount) : ""}"></div>
     <label class="fld" style="margin-top:0"><span>Nombre del movimiento (opcional)</span><input name="note" value="${esc(m.note || "")}" maxlength="80" placeholder="Ej: compra en el chino, heladera…"></label>
-    <div class="lab">Categoría</div><div class="chips" id="catChips"></div>
+    <label class="fld"><span>Categoría</span><select name="cat" id="catSel"></select></label>
     <div class="hint hidden" id="budInfo"></div>
     <div class="lab">Medio de pago</div><div class="chips" id="metChips"></div>
     <div id="cuotasBox" class="hidden">
@@ -956,7 +956,15 @@ function movForm(it, onDone) {
     ${isNew ? "" : `<button type="button" class="btn danger" id="delBtn">Eliminar</button>`}
   </form>`, onDone);
   const f = $("#f");
-  const drawCats = () => { const t = val(f, "type"); const cur = f.elements.cat ? val(f, "cat") : m.cat; $("#catChips").innerHTML = S.cfg.cats.filter(c => c.t === t).map(c => radio("cat", c.id, esc(c.i) + " " + esc(c.n), cur)).join(""); };
+  /* desplegable de categorías: las semanas de comida que no son la de la fecha quedan grisadas */
+  const drawCats = () => { const t = val(f, "type"), sel = $("#catSel"), cur = sel.options.length ? sel.value : m.cat, date = val(f, "date"), okDate = /^\d{4}-\d{2}-\d{2}$/.test(date);
+    const wk = okDate ? weekOf(date) : 0, rg = okDate ? weekRanges(ymOf(date)) : [];
+    sel.innerHTML = `<option value="">Elegí una categoría</option>` + S.cfg.cats.filter(c => c.t === t).map(c => {
+      let lbl = esc(c.i) + " " + esc(c.n), dis = false;
+      if (isWeekCat(c.id) && okDate) { const k = Number(c.id.slice(2)), r = rg[k - 1]; lbl += r ? ` (${r[0]} al ${r[1]})` : " (no hay este mes)"; dis = k !== wk && !(c.id === m.cat && !isNew && c.id === cur); }
+      return `<option value="${esc(c.id)}"${c.id === cur ? " selected" : ""}${dis ? " disabled" : ""}>${lbl}</option>`; }).join("");
+    if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled && isWeekCat(sel.value)) { const want = "wk" + wk; if (S.cfg.cats.some(c => c.id === want)) { sel.value = want; toast("Lo puse en la semana " + wk + ", la de esa fecha"); } }
+  };
   const drawMet = () => { const t = val(f, "type"); let cur = f.elements.method ? val(f, "method") : m.method; if (t === "ingreso" && String(cur).startsWith("card:")) cur = "debito"; $("#metChips").innerHTML = methodOptions(t, cur); if (!val(f, "method")) { const first = f.querySelector('input[name="method"]'); if (first) first.checked = true; } upd(); };
   const upd = () => { const isInc = val(f, "type") === "ingreso"; $("#budChk").classList.toggle("hidden", !isInc);
     const showEx = !isInc && (hasExtras() || m.fromExtra); $("#exChk").classList.toggle("hidden", !showEx);
@@ -983,9 +991,8 @@ function movForm(it, onDone) {
   drawCats(); drawMet();
   f.addEventListener("change", e => {
     if (e.target.name === "type") { drawCats(); drawMet(); return; }
-    if ((e.target.name === "cat" || e.target.name === "date") && isWeekCat(val(f, "cat")) && /^\d{4}-\d{2}-\d{2}$/.test(val(f, "date"))) {
-      const want = "wk" + weekOf(val(f, "date")), r = f.querySelector(`input[name="cat"][value="${want}"]`); if (r && !r.checked) { r.checked = true; toast("Lo puse en la semana " + want.slice(2) + ", la de esa fecha"); } }
-    if (e.target.name === "inBud" && !e.target.checked) { const id = extraCatId(true); drawCats(); const r = f.querySelector(`input[name="cat"][value="${id}"]`); if (r) r.checked = true; }
+    if (e.target.name === "date") drawCats();
+    if (e.target.name === "inBud" && !e.target.checked) { const id = extraCatId(true); drawCats(); $("#catSel").value = id; }
     upd(); });
   f.elements.amount.addEventListener("input", upd);
   if (isNew) setTimeout(() => f.elements.amount.focus(), 250);
