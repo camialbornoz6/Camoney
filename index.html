@@ -328,8 +328,8 @@ function listen(fromFb) {
   let first = true;
   const timer = setTimeout(() => {
     if (S.ready && !fromFb) return;
-    banner("Todavía no pude conectar con tus datos. Revisá la conexión… (v15)");
-    if (fromFb && db) db.collection(base).get({source: "server"}).then(() => banner("Conecté, pero tardó. Cerrá y abrí la app de nuevo. (v15)"), e => banner("No pude conectar (v15): " + ((e && e.code) || "") + " — " + ((e && e.message) || String(e)).slice(0, 180)));
+    banner("Todavía no pude conectar con tus datos. Revisá la conexión… (v16)");
+    if (fromFb && db) db.collection(base).get({source: "server"}).then(() => banner("Conecté, pero tardó. Cerrá y abrí la app de nuevo. (v16)"), e => banner("No pude conectar (v16): " + ((e && e.code) || "") + " — " + ((e && e.message) || String(e)).slice(0, 180)));
   }, 8000);
   unsub = db.collection(base).onSnapshot(snap => {
     let cfg = null; const months = {}; let sav = [];
@@ -1252,7 +1252,7 @@ $("#sheetBack").onclick = sheetBack;
 
 render();
 initStore();
-if ("serviceWorker" in navigator && location.protocol === "https:") { try { navigator.serviceWorker.register("sw.js").catch(() => {}); } catch (e) {} }
+if ("serviceWorker" in navigator && location.protocol === "https:") { try { navigator.serviceWorker.register("sw.js", {updateViaCache: "none"}).then(r => r.update()).catch(() => {}); } catch (e) {} }
 </script>
 </body>
 </html>
