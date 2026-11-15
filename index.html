@@ -313,7 +313,14 @@ function useLocal() {
 /* ---------- nube propia (Firebase) ----------
    Cuando la app se abre fuera de Claude (instalada en el celu o desde GitHub Pages) y FB tiene datos,
    guarda en Firebase con login por mail y contraseña. Así el celu y la compu ven lo mismo. */
-const FB = null; // ← acá va el firebaseConfig del proyecto
+const FB = {
+  apiKey: "AIzaSyAtr90f8JsaE8xDbN2K5jdiTUDG-hOUf0k",
+  authDomain: "camoney-6b2c0.firebaseapp.com",
+  projectId: "camoney-6b2c0",
+  storageBucket: "camoney-6b2c0.firebasestorage.app",
+  messagingSenderId: "455072614155",
+  appId: "1:455072614155:web:6cab7b96df02a86b1b440e"
+};
 const FBU = "https://www.gstatic.com/firebasejs/10.14.1/";
 let fbAuth = null, unsub = null;
 function loadScript(src) { return new Promise((ok, ko) => { const el = document.createElement("script"); el.src = src; el.onload = ok; el.onerror = ko; document.head.appendChild(el); }); }
