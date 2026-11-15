@@ -340,7 +340,8 @@ function listen(fromFb) {
     S.ready = true; render();
   }, err => {
     clearTimeout(timer);
-    banner(err && (err.code === "revoked" || err.code === "permission-denied") ? "Se perdió el acceso a tus datos." : "No pude cargar tus datos. Probá abrir la app de nuevo más tarde.");
+    const code = err && err.code;
+    banner(code === "permission-denied" ? (fromFb ? "Firebase no me deja leer tus datos: revisá las Reglas de Firestore (error: permission-denied)." : "Se perdió el acceso a tus datos.") : code === "revoked" ? "Se perdió el acceso a tus datos." : "No pude cargar tus datos" + (code ? " (" + code + ")" : "") + ". Probá abrir la app de nuevo más tarde.");
     S.ready = true; render();
   });
 }
@@ -385,7 +386,7 @@ async function initFirebase() {
   } catch (e) { $("#view").innerHTML = `<div class="loading">No pude conectarme. Revisá que tengas internet y volvé a abrir la app.</div>`; return; }
   firebase.initializeApp(FB);
   const fs = firebase.firestore();
-  try { fs.settings({ignoreUndefinedProperties: true}); } catch (e) {}
+  try { fs.settings({ignoreUndefinedProperties: true, experimentalForceLongPolling: true}); } catch (e) {}
   try { await fs.enablePersistence({synchronizeTabs: true}); } catch (e) {}
   fbAuth = firebase.auth();
   fbAuth.onAuthStateChanged(u => {
