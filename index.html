@@ -252,8 +252,11 @@ function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.ad
 function banner(msg) { const b = $("#banner"); if (!msg) { b.classList.add("hidden"); return; } b.textContent = msg; b.classList.remove("hidden"); }
 
 /* ---------- datos por defecto ---------- */
+/* comida y limpieza: una categoría por semana del mes (1 al 7, 8 al 14, 15 al 21, 22 a fin de mes) */
+const WEEK_CATS = [1, 2, 3, 4].map(n => ({id: "wk" + n, n: "Comida y limpieza · semana " + n, i: "🧺", t: "gasto"}));
 const DEF_CATS = [
   {id:"super",n:"Supermercado",i:"🛒",t:"gasto"},{id:"comida",n:"Comida y delivery",i:"🍔",t:"gasto"},
+  ...WEEK_CATS,
   {id:"trans",n:"Transporte",i:"🚌",t:"gasto"},{id:"serv",n:"Servicios",i:"💡",t:"gasto"},
   {id:"alq",n:"Alquiler / expensas",i:"🏠",t:"gasto"},{id:"salud",n:"Salud",i:"💊",t:"gasto"},
   {id:"ropa",n:"Ropa",i:"👕",t:"gasto"},{id:"salida",n:"Salidas",i:"🎉",t:"gasto"},
@@ -265,7 +268,7 @@ const DEF_CATS = [
 const CARD_COLORS = ["#1F3A5F","#6B2D5C","#2F5D50","#8A4B1E","#3D3A8C","#5A5A5A","#A23B3B"];
 const ACC_TYPES = {efectivo:"Efectivo",mp:"Mercado Pago",banco:"Cuenta bancaria",pf:"Plazo fijo",fci:"FCI / inversión",otro:"Otro"};
 const BASE_METHODS = [{id:"efectivo",n:"Efectivo",i:"💵"},{id:"debito",n:"Débito / transf.",i:"🏦"},{id:"mp",n:"Mercado Pago",i:"📱"}];
-const defCfg = () => ({cats: DEF_CATS.map(c => ({...c})), cards: [], accounts: [], goals: [], budgets: {}, fixed: [], usd: 0, debts: [], people: [], paid: {}, cardUsd: {}, weekly: {amount: 0, cats: ["super", "comida"]}, mbudgets: {}, quick: []});
+const defCfg = () => ({cats: DEF_CATS.map(c => ({...c})), cards: [], accounts: [], goals: [], budgets: {}, fixed: [], usd: 0, debts: [], people: [], paid: {}, cardUsd: {}, weekly: {amount: 0, cats: ["super", "comida"]}, mbudgets: {}, quick: [], mig: {}});
 
 /* ---------- estado ---------- */
 const S = { cfg: defCfg(), months: {}, sav: [], month: ymOf(todayStr()), tab: "inicio", ready: false, mode: "db", filter: {type: "all", method: "all", q: ""} };
@@ -289,6 +292,12 @@ function applyCfg(d) {
   const c = defCfg();
   if (d && typeof d === "object") for (const k of Object.keys(c)) if (d[k] !== undefined && typeof d[k] === typeof c[k] && Array.isArray(d[k]) === Array.isArray(c[k])) c[k] = d[k];
   if (!c.cats.length) c.cats = DEF_CATS.map(x => ({...x}));
+  /* una sola vez: suma las 4 categorías semanales a cuentas que ya existían (si después borrás alguna, no vuelve) */
+  if (!c.mig.wk) {
+    const miss = WEEK_CATS.filter(w => !c.cats.some(x => x.id === w.id)).map(w => ({...w}));
+    if (miss.length) { const i = c.cats.findIndex(x => x.id === "comida"); c.cats = i >= 0 ? [...c.cats.slice(0, i + 1), ...miss, ...c.cats.slice(i + 1)] : [...c.cats, ...miss]; }
+    c.mig = {...c.mig, wk: 1};
+  }
   S.cfg = c;
 }
 function persist(docId) {
@@ -334,8 +343,8 @@ function listen(fromFb) {
   let first = true;
   const timer = setTimeout(() => {
     if (S.ready && !fromFb) return;
-    banner("Todavía no pude conectar con tus datos. Revisá la conexión… (v19)");
-    if (fromFb && db) db.collection(base).get({source: "server"}).then(() => banner("Conecté, pero tardó. Cerrá y abrí la app de nuevo. (v19)"), e => banner("No pude conectar (v19): " + ((e && e.code) || "") + " — " + ((e && e.message) || String(e)).slice(0, 180)));
+    banner("Todavía no pude conectar con tus datos. Revisá la conexión… (v20)");
+    if (fromFb && db) db.collection(base).get({source: "server"}).then(() => banner("Conecté, pero tardó. Cerrá y abrí la app de nuevo. (v20)"), e => banner("No pude conectar (v20): " + ((e && e.code) || "") + " — " + ((e && e.message) || String(e)).slice(0, 180)));
   }, 8000);
   unsub = db.collection(base).onSnapshot(snap => {
     let cfg = null; const months = {}; let sav = [];
@@ -570,7 +579,6 @@ function vInicio() {
   </div>
   ${alerts.join("")}
   ${budgetCard(M, st)}
-  ${weeklyCard(M)}
   ${!hasData ? `<div class="card"><h3>¡Arranquemos!</h3><div class="note">Tocá el <b>+</b> para cargar tu primer gasto o ingreso. Si usás tarjetas, agregalas en la pestaña <b>Tarjetas</b> con su fecha de cierre y vencimiento, así las cuotas caen en el mes correcto.</div></div>` : ""}
   <div class="card"><h3>Por medio de pago</h3><div class="tiles">
     <div class="tile"><span>💵 Efectivo</span><b style="color:var(--out)">${money(st.byMethod.efectivo)}</b></div>
@@ -843,7 +851,6 @@ function vMas() {
     <button data-act="tab" data-v="deudas"><span>🧾</span><span>Deudas</span><span>${debtTotLabel(debtTotals(S.cfg.debts || []))}</span></button>
     <button data-act="tab" data-v="hist"><span>🗓️</span><span>Historial de meses</span><span></span></button>
     <button data-act="budgets"><span>📊</span><span>Presupuesto de ${mOnly(M)}</span><span>${(S.cfg.mbudgets || {})[M] ? money(Object.values(budFor(M).b).reduce((t, v) => t + (Number(v) || 0), 0)) : "Sin armar"}</span></button>
-    <button data-act="weekly"><span>🛒</span><span>Comida por semana</span><span>${S.cfg.weekly && S.cfg.weekly.amount ? money(S.cfg.weekly.amount) : "Sin usar"}</span></button>
     <button data-act="people"><span>👥</span><span>Personas que usan tus tarjetas</span><span>${(S.cfg.people || []).length || ""}</span></button>
     <button data-act="cats"><span>🏷️</span><span>Categorías</span><span>${S.cfg.cats.length}</span></button>
     <button data-act="usd"><span>💲</span><span>Cotización del dólar</span><span>${S.cfg.usd ? money(S.cfg.usd) : "Sin cargar"}</span></button>
