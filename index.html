@@ -938,6 +938,7 @@ function movForm(it, onDone) {
   <form id="f" autocomplete="off">
     <div class="seg">${radio("type", "gasto", "Gasto", m.type)}${radio("type", "ingreso", "Ingreso", m.type)}</div>
     <div class="bigin"><span id="curSym">$</span><input name="amount" inputmode="decimal" placeholder="0" value="${m.amount !== "" ? numIn(m.amount) : ""}"></div>
+    <label class="fld" style="margin-top:0"><span>Nombre del movimiento (opcional)</span><input name="note" value="${esc(m.note || "")}" maxlength="80" placeholder="Ej: compra en el chino, heladera…"></label>
     <div class="lab">Categoría</div><div class="chips" id="catChips"></div>
     <div class="hint hidden" id="budInfo"></div>
     <div class="lab">Medio de pago</div><div class="chips" id="metChips"></div>
@@ -951,7 +952,6 @@ function movForm(it, onDone) {
     <label class="chk hidden" id="exChk"><input type="checkbox" name="fromExtra" ${m.fromExtra ? "checked" : ""}> <span>Salió de mis ingresos extra <small id="exLeft" style="color:var(--mute);font-weight:500"></small></span></label>
     <label class="chk hidden" id="budChk"><input type="checkbox" name="inBud" ${m.noBud ? "" : "checked"}> Contar este ingreso en el presupuesto del mes</label>
     <label class="fld"><span>Fecha</span><input type="date" name="date" value="${esc(m.date)}" required></label>
-    <label class="fld"><span>Nota (opcional)</span><input name="note" value="${esc(m.note || "")}" maxlength="80" placeholder="Ej: compra en el chino, heladera…"></label>
     <button class="btn primary" type="submit">Guardar</button>
     ${isNew ? "" : `<button type="button" class="btn danger" id="delBtn">Eliminar</button>`}
   </form>`, onDone);
