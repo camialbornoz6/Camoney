@@ -253,7 +253,7 @@ function banner(msg) { const b = $("#banner"); if (!msg) { b.classList.add("hidd
 
 /* ---------- datos por defecto ---------- */
 /* comida y limpieza: una categoría por semana del mes (1 al 7, 8 al 14, 15 al 21, 22 a fin de mes) */
-const WEEK_CATS = [1, 2, 3, 4].map(n => ({id: "wk" + n, n: "Comida y limpieza · semana " + n, i: "🧺", t: "gasto"}));
+const WEEK_CATS = [1, 2, 3, 4, 5].map(n => ({id: "wk" + n, n: "Comida y limpieza · semana " + n, i: "🧺", t: "gasto"}));
 const DEF_CATS = [
   {id:"super",n:"Supermercado",i:"🛒",t:"gasto"},{id:"comida",n:"Comida y delivery",i:"🍔",t:"gasto"},
   ...WEEK_CATS,
@@ -296,7 +296,11 @@ function applyCfg(d) {
   if (!c.mig.wk) {
     const miss = WEEK_CATS.filter(w => !c.cats.some(x => x.id === w.id)).map(w => ({...w}));
     if (miss.length) { const i = c.cats.findIndex(x => x.id === "comida"); c.cats = i >= 0 ? [...c.cats.slice(0, i + 1), ...miss, ...c.cats.slice(i + 1)] : [...c.cats, ...miss]; }
-    c.mig = {...c.mig, wk: 1};
+    c.mig = {...c.mig, wk: 1, wk5: 1};
+  }
+  if (!c.mig.wk5) {
+    if (!c.cats.some(x => x.id === "wk5")) { const w = {...WEEK_CATS[4]}, i = c.cats.findIndex(x => x.id === "wk4"); c.cats = i >= 0 ? [...c.cats.slice(0, i + 1), w, ...c.cats.slice(i + 1)] : [...c.cats, w]; }
+    c.mig = {...c.mig, wk5: 1};
   }
   S.cfg = c;
 }
@@ -343,8 +347,8 @@ function listen(fromFb) {
   let first = true;
   const timer = setTimeout(() => {
     if (S.ready && !fromFb) return;
-    banner("Todavía no pude conectar con tus datos. Revisá la conexión… (v22)");
-    if (fromFb && db) db.collection(base).get({source: "server"}).then(() => banner("Conecté, pero tardó. Cerrá y abrí la app de nuevo. (v22)"), e => banner("No pude conectar (v22): " + ((e && e.code) || "") + " — " + ((e && e.message) || String(e)).slice(0, 180)));
+    banner("Todavía no pude conectar con tus datos. Revisá la conexión… (v23)");
+    if (fromFb && db) db.collection(base).get({source: "server"}).then(() => banner("Conecté, pero tardó. Cerrá y abrí la app de nuevo. (v23)"), e => banner("No pude conectar (v23): " + ((e && e.code) || "") + " — " + ((e && e.message) || String(e)).slice(0, 180)));
   }, 8000);
   unsub = db.collection(base).onSnapshot(snap => {
     let cfg = null; const months = {}; let sav = [];
@@ -473,7 +477,20 @@ function owedBy(sched) {
   }
   return Object.values(map).sort((a, b) => b.total - a.total);
 }
-function weekRanges(ym) { const [y, m] = ym.split("-").map(Number), last = new Date(y, m, 0).getDate(); return [[1, 7], [8, 14], [15, 21], [22, last]]; }
+/* semanas de lunes a domingo; si la primera o la última quedan de menos de 4 días, se suman a la semana de al lado (4 o 5 semanas por mes) */
+function weekRanges(ym) {
+  const [y, m] = ym.split("-").map(Number), last = new Date(y, m, 0).getDate(), r = [];
+  let a = 1;
+  while (a <= last) { const dow = (new Date(y, m - 1, a).getDay() + 6) % 7, b = Math.min(last, a + 6 - dow); r.push([a, b]); a = b + 1; }
+  if (r.length > 1 && r[0][1] - r[0][0] + 1 < 4) { r[1][0] = r[0][0]; r.shift(); }
+  const n = r.length; if (n > 1 && r[n - 1][1] - r[n - 1][0] + 1 < 4) { r[n - 2][1] = r[n - 1][1]; r.pop(); }
+  return r;
+}
+const weekOf = date => { const d = Number(String(date).slice(8, 10)); return weekRanges(ymOf(date)).findIndex(([a, b]) => d >= a && d <= b) + 1; };
+const isWeekCat = id => /^wk[1-5]$/.test(id || "");
+/* semanas desde la del gasto hasta fin de mes, solo las que tienen categoría */
+function splitWeeks(date) { const n = weekRanges(ymOf(date)).length, out = []; for (let k = weekOf(date); k <= n; k++) if (S.cfg.cats.some(c => c.id === "wk" + k)) out.push(k); return out; }
+function splitAmounts(total, n) { const per = Math.floor(total / n * 100) / 100, arr = Array(n).fill(per); arr[n - 1] = Math.round((total - per * (n - 1)) * 100) / 100; return arr; }
 function weeklyData(ym) {
   const cats = (S.cfg.weekly && S.cfg.weekly.cats) || [];
   const r = weekRanges(ym).map(([a, b]) => ({a, b, sp: 0}));
@@ -930,6 +947,7 @@ function movForm(it, onDone) {
       <div class="lab">¿De quién es el gasto?</div><div class="chips" id="whoChips">${[...new Set([...(S.cfg.people || []), ...(m.who ? [m.who] : [])])].reduce((h, p) => h + radio("who", p, esc(p), m.who || ""), radio("who", "", "🙋 Mío", m.who || ""))}${radio("who", "__new", "+ Otra persona", "")}</div>
       <label class="fld hidden" id="newWhoBox"><span>Nombre</span><input name="newWho" maxlength="30" placeholder="Ej: Lisandro, Mamá"></label>
     </div>
+    <label class="chk hidden" id="splitChk"><input type="checkbox" name="split"> <span>Dividir entre las semanas que faltan del mes <small id="splitInfo" style="color:var(--mute);font-weight:500"></small></span></label>
     <label class="chk hidden" id="exChk"><input type="checkbox" name="fromExtra" ${m.fromExtra ? "checked" : ""}> <span>Salió de mis ingresos extra <small id="exLeft" style="color:var(--mute);font-weight:500"></small></span></label>
     <label class="chk hidden" id="budChk"><input type="checkbox" name="inBud" ${m.noBud ? "" : "checked"}> Contar este ingreso en el presupuesto del mes</label>
     <label class="fld"><span>Fecha</span><input type="date" name="date" value="${esc(m.date)}" required></label>
@@ -942,7 +960,11 @@ function movForm(it, onDone) {
   const drawMet = () => { const t = val(f, "type"); let cur = f.elements.method ? val(f, "method") : m.method; if (t === "ingreso" && String(cur).startsWith("card:")) cur = "debito"; $("#metChips").innerHTML = methodOptions(t, cur); if (!val(f, "method")) { const first = f.querySelector('input[name="method"]'); if (first) first.checked = true; } upd(); };
   const upd = () => { const isInc = val(f, "type") === "ingreso"; $("#budChk").classList.toggle("hidden", !isInc);
     const showEx = !isInc && (hasExtras() || m.fromExtra); $("#exChk").classList.toggle("hidden", !showEx);
-    if (showEx) { const l = extraLeft(m.id); $("#exLeft").textContent = "· te quedan " + money(l); } const isCard = String(val(f, "method")).startsWith("card:"); $("#cuotasBox").classList.toggle("hidden", !isCard); const usd = isCard && val(f, "cur") === "USD"; $("#curSym").textContent = usd ? "US$" : "$"; $("#newWhoBox").classList.toggle("hidden", val(f, "who") !== "__new"); const n = Number(val(f, "cuotas")) || 1, a = parseAmt(val(f, "amount")); let info = ""; if (isCard) { const c = card(val(f, "method").slice(5)); if (n > 1 && a > 0) info = n + " cuotas de " + money(a / n, usd ? "USD" : "ARS") + ". "; if (c && val(f, "date")) info += "La primera cae en el resumen de " + mOnly(firstDue(c, val(f, "date"))) + "."; } $("#cuotaInfo").textContent = info; budHint(); };
+    if (showEx) { const l = extraLeft(m.id); $("#exLeft").textContent = "· te quedan " + money(l); }
+    const sw = /^\d{4}-\d{2}-\d{2}$/.test(val(f, "date")) ? splitWeeks(val(f, "date")) : [];
+    const canSplit = isNew && !isInc && isWeekCat(val(f, "cat")) && !String(val(f, "method")).startsWith("card:") && sw.length > 1;
+    $("#splitChk").classList.toggle("hidden", !canSplit);
+    if (canSplit) { const a = parseAmt(val(f, "amount")); $("#splitInfo").textContent = "· " + sw.length + " semanas (" + sw.map(k => k).join(", ") + ")" + (a > 0 ? ": " + money(a / sw.length) + " c/u" : ""); } const isCard = String(val(f, "method")).startsWith("card:"); $("#cuotasBox").classList.toggle("hidden", !isCard); const usd = isCard && val(f, "cur") === "USD"; $("#curSym").textContent = usd ? "US$" : "$"; $("#newWhoBox").classList.toggle("hidden", val(f, "who") !== "__new"); const n = Number(val(f, "cuotas")) || 1, a = parseAmt(val(f, "amount")); let info = ""; if (isCard) { const c = card(val(f, "method").slice(5)); if (n > 1 && a > 0) info = n + " cuotas de " + money(a / n, usd ? "USD" : "ARS") + ". "; if (c && val(f, "date")) info += "La primera cae en el resumen de " + mOnly(firstDue(c, val(f, "date"))) + "."; } $("#cuotaInfo").textContent = info; budHint(); };
   const budHint = () => {
     const box = $("#budInfo"), c = val(f, "cat"), date = val(f, "date"), method = val(f, "method");
     box.classList.add("hidden");
@@ -961,6 +983,8 @@ function movForm(it, onDone) {
   drawCats(); drawMet();
   f.addEventListener("change", e => {
     if (e.target.name === "type") { drawCats(); drawMet(); return; }
+    if ((e.target.name === "cat" || e.target.name === "date") && isWeekCat(val(f, "cat")) && /^\d{4}-\d{2}-\d{2}$/.test(val(f, "date"))) {
+      const want = "wk" + weekOf(val(f, "date")), r = f.querySelector(`input[name="cat"][value="${want}"]`); if (r && !r.checked) { r.checked = true; toast("Lo puse en la semana " + want.slice(2) + ", la de esa fecha"); } }
     if (e.target.name === "inBud" && !e.target.checked) { const id = extraCatId(true); drawCats(); const r = f.querySelector(`input[name="cat"][value="${id}"]`); if (r) r.checked = true; }
     upd(); });
   f.elements.amount.addEventListener("input", upd);
@@ -986,6 +1010,13 @@ function movForm(it, onDone) {
         nm.who = who;
       }
     }
+    if (isNew && f.elements.split.checked && !$("#splitChk").classList.contains("hidden")) {
+      const ws = splitWeeks(date), am = splitAmounts(amount, ws.length), grp = gid();
+      ws.forEach((k, j) => upsertMov({...nm, id: j ? gid() : nm.id, amount: am[j], cat: "wk" + k, split: grp, note: (nm.note ? nm.note + " " : "") + "(" + (j + 1) + "/" + ws.length + ")"}, null));
+      closeSheet(); toast("Dividido en " + ws.length + " semanas de " + money(amount / ws.length));
+      if (ymOf(date) !== S.month) S.month = ymOf(date);
+      render(); if (onDone) onDone(); return;
+    }
     upsertMov(nm, it && !it._new ? it : null);
     closeSheet();
     let msg = isNew ? "Listo, guardado" : "Cambios guardados";
@@ -1006,7 +1037,7 @@ function quickCard() {
   const list = quickList(); if (!list.length) return "";
   const tot = list.reduce((t, q) => t + q.amount, 0);
   return `<div class="card"><h3>⚡ Gastos rápidos sin pasar <span style="color:var(--out)">${money(tot)}</span></h3>
-    ${list.slice().sort((a, b) => a.date.localeCompare(b.date)).map(q => `<button class="item" data-act="editQuick" data-id="${esc(q.id)}"><div class="ico">${esc(cat(q.cat).i)}</div><div class="mid"><b>${esc(q.note || cat(q.cat).n)}</b><small>${esc((q.note ? cat(q.cat).n + " · " : "") + methodLabel(q.method || "efectivo") + " · " + (q.date === todayStr() ? "hoy" : dayLabel(q.date)))}</small></div><div class="amt out">−${money(q.amount)}</div></button>`).join("")}
+    ${list.slice().sort((a, b) => a.date.localeCompare(b.date)).map(q => `<button class="item" data-act="editQuick" data-id="${esc(q.id)}"><div class="ico">${esc(cat(q.cat).i)}</div><div class="mid"><b>${esc(q.note || cat(q.cat).n)}</b><small>${esc((q.note ? cat(q.cat).n + " · " : "") + methodLabel(q.method || "efectivo") + (q.split ? " · ÷ semanas" : "") + " · " + (q.date === todayStr() ? "hoy" : dayLabel(q.date)))}</small></div><div class="amt out">−${money(q.amount)}</div></button>`).join("")}
     <button class="btn primary" data-act="passQuick">Pasar a gastos</button>
     <div class="note" style="margin-top:8px">Todavía no cuentan en el mes: se suman cuando los pasás.</div></div>`;
 }
@@ -1023,18 +1054,24 @@ function quickForm(q) {
     <label class="fld"><span>Detalle</span><input name="note" value="${esc(q.note || "")}" maxlength="80" placeholder="Ej: café, kiosco, nafta…"></label>
     <label class="fld"><span>Categoría</span><select name="cat"><option value="">Elegí una categoría</option>${opts}</select></label>
     <label class="fld"><span>Medio de pago</span><select name="method">${quickMethodOpts(q.method || "efectivo")}</select></label>
+    <label class="chk hidden" id="qSplit"><input type="checkbox" name="split" ${q.split ? "checked" : ""}> <span>Dividir entre las semanas que faltan del mes <small id="qSplitInfo" style="color:var(--mute);font-weight:500"></small></span></label>
     ${hasExtras() || q.fromExtra ? `<label class="chk"><input type="checkbox" name="fromExtra" ${q.fromExtra ? "checked" : ""}> <span>Salió de mis ingresos extra <small style="color:var(--mute);font-weight:500">· te quedan ${money(extraLeft(q.id))}</small></span></label>` : ""}
     <button class="btn primary" type="submit">Guardar</button>
     ${isNew ? `<button class="btn ghost" type="button" id="qMore">Guardar y anotar otro</button>` : `<button type="button" class="btn danger" id="delBtn">Eliminar</button>`}
   </form>`);
   const f = $("#qf");
   if (isNew) setTimeout(() => f.elements.amount.focus(), 250);
+  const qUpd = () => { const sw = splitWeeks(q.date), ok = isWeekCat(val(f, "cat")) && !String(val(f, "method")).startsWith("card:") && sw.length > 1; $("#qSplit").classList.toggle("hidden", !ok);
+    if (ok) { const a = parseAmt(val(f, "amount")); $("#qSplitInfo").textContent = "· " + sw.length + " semanas (" + sw.join(", ") + ")" + (a > 0 ? ": " + money(a / sw.length) + " c/u" : ""); } };
+  f.elements.cat.onchange = () => { const c = val(f, "cat"); if (isWeekCat(c)) { const want = "wk" + weekOf(q.date); if (c !== want && S.cfg.cats.some(x => x.id === want)) { f.elements.cat.value = want; toast("Lo puse en la semana " + want.slice(2) + ", la de hoy"); } } qUpd(); };
+  f.elements.method.onchange = qUpd; f.elements.amount.oninput = qUpd; qUpd();
   const save = more => {
     const amount = parseAmt(val(f, "amount"));
     if (!(amount > 0)) { toast("Poné un importe válido"); return; }
     if (!val(f, "cat")) { toast("Elegí una categoría"); return; }
     const nq = {id: q.id || gid(), ts: q.ts || Date.now(), date: q.date, amount, note: val(f, "note").trim(), cat: val(f, "cat"), method: val(f, "method") || "efectivo"};
     if (f.elements.fromExtra && f.elements.fromExtra.checked) nq.fromExtra = true;
+    if (!$("#qSplit").classList.contains("hidden") && f.elements.split.checked) nq.split = true;
     try { localStorage.setItem(LS + "-qmet", nq.method); } catch (e) {}
     const list = quickList();
     S.cfg.quick = isNew ? [...list, nq] : list.map(x => x.id === nq.id ? nq : x);
@@ -1057,7 +1094,9 @@ function passQuickForm() {
       let method = q.method || "efectivo"; if (method.startsWith("card:") && !card(method.slice(5))) method = "efectivo";
       const y = ymOf(q.date);
       const nm = {id: gid(), ts: q.ts || Date.now(), type: "gasto", amount: q.amount, date: q.date, cat: q.cat, method, cuotas: 1, note: q.note || ""}; if (q.fromExtra) nm.fromExtra = true;
-      S.months[y] = [...(S.months[y] || []), nm].sort((a, b) => a.date.localeCompare(b.date)); months.add(y);
+      const ws = q.split && isWeekCat(q.cat) && !method.startsWith("card:") ? splitWeeks(q.date) : [];
+      const add = ws.length > 1 ? (() => { const am = splitAmounts(q.amount, ws.length), grp = gid(); return ws.map((k, j) => ({...nm, id: gid(), amount: am[j], cat: "wk" + k, split: grp, note: (nm.note ? nm.note + " " : "") + "(" + (j + 1) + "/" + ws.length + ")"})); })() : [nm];
+      S.months[y] = [...(S.months[y] || []), ...add].sort((a, b) => a.date.localeCompare(b.date)); months.add(y);
     }
     months.forEach(saveMonth);
     const done = new Set(list.map(q => q.id));
