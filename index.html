@@ -280,12 +280,14 @@ const DEF_CATS = [
 const CARD_COLORS = ["#1F3A5F","#6B2D5C","#2F5D50","#8A4B1E","#3D3A8C","#5A5A5A","#A23B3B"];
 const ACC_TYPES = {efectivo:"Efectivo",mp:"Mercado Pago",banco:"Cuenta bancaria",pf:"Plazo fijo",fci:"FCI / inversión",otro:"Otro"};
 const BASE_METHODS = [{id:"efectivo",n:"Efectivo",i:"💵"},{id:"debito",n:"Débito / transf.",i:"🏦"},{id:"mp",n:"Mercado Pago",i:"📱"}];
-const defCfg = () => ({cats: DEF_CATS.map(c => ({...c})), cards: [], accounts: [], goals: [], budgets: {}, fixed: [], usd: 0, debts: [], people: [], paid: {}, cardUsd: {}, weekly: {amount: 0, cats: ["super", "comida"]}, mbudgets: {}, quick: [], mig: {}, fxHist: {}, usdSrc: "bolsa", cardFx: "tarjeta", stmts: {}, reint: {}});
+const defCfg = () => ({cats: DEF_CATS.map(c => ({...c})), cards: [], accounts: [], goals: [], budgets: {}, fixed: [], usd: 0, debts: [], people: [], paid: {}, cardUsd: {}, weekly: {amount: 0, cats: ["super", "comida"]}, mbudgets: {}, quick: [], mig: {}, fxHist: {}, usdSrc: "bolsa", cardFx: "tarjeta", stmts: {}, reint: {}, groups: []});
 
 /* ---------- estado ---------- */
 const S = { cfg: defCfg(), months: {}, sav: [], month: ymOf(todayStr()), tab: "inicio", ready: false, mode: "db", filter: {type: "all", method: "all", q: ""} };
 const cat = id => S.cfg.cats.find(c => c.id === id) || {id, n: "Sin categoría", i: "❔", t: "gasto"};
 const card = id => S.cfg.cards.find(c => c.id === id);
+/* grupos: categorías grandes que juntan varias categorías (ej. Servicios = Edesur + Metrogas + Internet) para el análisis */
+const grp = id => (S.cfg.groups || []).find(g => g.id === id);
 const acc = id => S.cfg.accounts.find(a => a.id === id);
 const allItems = () => Object.values(S.months).flat();
 function methodLabel(m) {
@@ -811,10 +813,14 @@ function calendarForm(year) {
 /* ---------- análisis: tortas de gastos e ingresos por categoría ----------
    Paleta categórica validada para el fondo oscuro (orden fijo, nunca se repite: lo que pasa de 7 va a "Otras"). */
 const ANA_COLORS = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#0ca30c", "#9085e9"], ANA_OTHER = "#6b6b6b";
-function anaData(ym, type) {
-  const by = {};
-  for (const it of S.months[ym] || []) { if (it.type !== type || String(it.method).startsWith("card:") || it.cardPay) continue; by[it.cat] = (by[it.cat] || 0) + it.amount; }
-  const arr = Object.entries(by).filter(([, v]) => v > 0.004).sort((a, b) => b[1] - a[1]).map(([id, v], i) => ({id, v, n: cat(id).n, i: cat(id).i, c: ANA_COLORS[i]}));
+function anaData(ym, type, mode) {
+  const by = {}, sub = {}, G = mode === "grp";
+  for (const it of S.months[ym] || []) { if (it.type !== type || String(it.method).startsWith("card:") || it.cardPay) continue;
+    const c = cat(it.cat), k = G ? (c.g && grp(c.g) ? c.g : "__nog") : it.cat; by[k] = (by[k] || 0) + it.amount;
+    if (G) { const sb = sub[k] || (sub[k] = {}); sb[it.cat] = (sb[it.cat] || 0) + it.amount; } }
+  const info = id => G ? (id === "__nog" ? {n: "Sin grupo", i: "•"} : grp(id)) : cat(id);
+  const arr = Object.entries(by).filter(([, v]) => v > 0.004).sort((a, b) => b[1] - a[1]).map(([id, v], i) => ({id, v, n: info(id).n, i: info(id).i, c: ANA_COLORS[i],
+    cats: G ? Object.entries(sub[id]).sort((a, b) => b[1] - a[1]).map(([cid, cv]) => ({id: cid, v: cv, n: cat(cid).n, i: cat(cid).i})) : null}));
   if (arr.length > ANA_COLORS.length) { const rest = arr.splice(ANA_COLORS.length - 1); arr.push({id: "__otras", v: rest.reduce((t, x) => t + x.v, 0), n: "Otras (" + rest.length + ")", i: "•", c: ANA_OTHER, list: rest}); }
   return arr;
 }
@@ -828,18 +834,21 @@ function donutSvg(arr, total, sel) {
     ${s ? `<text x="95" y="124" text-anchor="middle" fill="var(--mute)" font-size="11">${(s.v / total * 100).toFixed(1).replace(".", ",")}%</text>` : ""}</svg>`;
 }
 function vAnalisis() {
-  const M = S.month, type = S.ana === "ingreso" ? "ingreso" : "gasto", arr = anaData(M, type), total = arr.reduce((t, x) => t + x.v, 0), sel = S.anaSel;
-  const st = stats(M), pv = anaData(addM(M, -1), type), pvMap = {}; pv.forEach(x => { (x.list || [x]).forEach(y => { pvMap[y.id] = y.v; }); });
-  const seg = `<div class="seg" style="margin-bottom:12px"><label><input type="radio" name="anaT" ${type === "gasto" ? "checked" : ""} data-act="anaSeg" data-id="gasto"><span data-act="anaSeg" data-id="gasto">Gastos</span></label><label><input type="radio" name="anaT" ${type === "ingreso" ? "checked" : ""} data-act="anaSeg" data-id="ingreso"><span data-act="anaSeg" data-id="ingreso">Ingresos</span></label></div>`;
+  const M = S.month, type = S.ana === "ingreso" ? "ingreso" : "gasto", mode = S.anaBy === "grp" ? "grp" : "cat", arr = anaData(M, type, mode), total = arr.reduce((t, x) => t + x.v, 0), sel = S.anaSel;
+  const st = stats(M), pv = anaData(addM(M, -1), type, mode), pvMap = {}; pv.forEach(x => { pvMap[x.id] = x.v; (x.list || []).forEach(y => { pvMap[y.id] = y.v; }); });
+  const hasG = (S.cfg.groups || []).some(g => g.t === type);
+  const seg = `<div class="seg" style="margin-bottom:12px"><label><input type="radio" name="anaT" ${type === "gasto" ? "checked" : ""} data-act="anaSeg" data-id="gasto"><span data-act="anaSeg" data-id="gasto">Gastos</span></label><label><input type="radio" name="anaT" ${type === "ingreso" ? "checked" : ""} data-act="anaSeg" data-id="ingreso"><span data-act="anaSeg" data-id="ingreso">Ingresos</span></label></div>
+    <div class="filters" style="margin:-4px 0 12px"><button class="fchip ${mode === "cat" ? "on" : ""}" data-act="anaBy" data-id="cat">Por categoría</button><button class="fchip ${mode === "grp" ? "on" : ""}" data-act="anaBy" data-id="grp">🗂️ Por grupo</button></div>
+    ${mode === "grp" && !hasG ? `<div class="alert info">Todavía no armaste grupos de ${type === "gasto" ? "gastos" : "ingresos"}<button data-act="groups">Armar</button></div>` : ""}`;
   let html = `<button class="back" data-act="tab" data-v="inicio">‹ Volver</button><div class="card"><h3>Análisis de ${mName(M)}</h3>
     <div class="tiles"><div class="tile"><span>Ingresos</span><b style="color:var(--in)">${money(st.ing)}</b></div><div class="tile"><span>Gastos</span><b style="color:var(--out)">${money(st.gastos)}</b></div></div>
     <div class="note" style="margin-top:8px">${st.ing - st.gastos >= 0 ? "Te quedó " + money(st.ing - st.gastos) + " después de los gastos" : "Gastaste " + money(st.gastos - st.ing) + " más de lo que entró"}. Las compras con tarjeta no entran: cuenta lo que anotás en Gastos (por ejemplo, el pago de la tarjeta).</div></div>${seg}`;
   if (!arr.length) return html + `<div class="empty">No hay ${type === "gasto" ? "gastos" : "ingresos"} en ${mName(M)}. Cambiá de mes con las flechas de arriba.</div>`;
   html += `<div class="card"><div class="donut">${donutSvg(arr, total, sel)}</div>
-    <div class="note" style="text-align:center;margin:4px 0 10px">Tocá una porción o una categoría para ver el detalle.</div>
-    ${arr.map(x => { const pvv = x.list ? x.list.reduce((t, y) => t + (pvMap[y.id] || 0), 0) : pvMap[x.id] || 0, dif = pvv ? (x.v - pvv) / pvv * 100 : null;
+    <div class="note" style="text-align:center;margin:4px 0 10px">Tocá una porción o ${mode === "grp" ? "un grupo para ver qué categorías tiene" : "una categoría para ver el detalle"}.</div>
+    ${arr.map(x => { const pvv = x.list ? x.list.reduce((t, y) => t + (pvMap[y.id] || 0), 0) : pvMap[x.id] || 0, dif = pvv ? (x.v - pvv) / pvv * 100 : null, det = x.list || x.cats;
       return `<button class="legrow${sel === x.id ? " sel" : ""}" data-act="anaSel" data-id="${esc(x.id)}"><span class="sw" style="background:${x.c}"></span><span class="nm">${esc(x.i)} ${esc(x.n)}<small>${(x.v / total * 100).toFixed(1).replace(".", ",")}% del total${dif !== null ? " · " + (dif >= 0 ? "▲ " : "▼ ") + Math.abs(dif).toFixed(0) + "% vs " + mOnly(addM(M, -1)) : ""}</small><span class="bar"><i style="width:${(x.v / arr[0].v * 100).toFixed(1)}%;background:${x.c}"></i></span></span><b>${money(x.v)}</b></button>` +
-        (x.list && sel === x.id ? x.list.map(y => `<div class="legrow" style="padding-left:24px;font-size:13px"><span class="nm">${esc(y.i)} ${esc(y.n)}</span><b>${money(y.v)}</b></div>`).join("") : ""); }).join("")}
+        (det && sel === x.id ? det.map(y => `<div class="legrow" style="padding-left:24px;font-size:13px"><span class="nm">${esc(y.i)} ${esc(y.n)}</span><b>${money(y.v)}</b></div>`).join("") : ""); }).join("")}
     <div class="legrow" style="font-weight:800"><span class="nm">Total</span><b>${money(total)}</b></div></div>`;
   return html;
 }
@@ -1755,8 +1764,9 @@ function budgetsForm(draft) {
   const del = $("#delBtn"); if (del) twoTap(del, () => { const mb = {...(S.cfg.mbudgets || {})}; delete mb[M]; S.cfg.mbudgets = mb; persist("config"); closeSheet(); toast("Presupuesto borrado"); render(); });
 }
 function catsForm() {
-  const row = c => `<div class="fix"><div class="ico">${esc(c.i)}</div><div class="mid"><b>${esc(c.n)}</b><small>${c.t === "gasto" ? "Gasto" : "Ingreso"}</small></div><button class="mini" data-act="editCat" data-id="${esc(c.id)}">Editar</button></div>`;
+  const row = c => `<div class="fix"><div class="ico">${esc(c.i)}</div><div class="mid"><b>${esc(c.n)}</b><small>${grp(c.g) ? "Grupo: " + esc(grp(c.g).i + " " + grp(c.g).n) : "Sin grupo"}</small></div><button class="mini" data-act="editCat" data-id="${esc(c.id)}">Editar</button></div>`;
   openSheet(`<h2>Categorías</h2><button class="btn ghost" data-act="newCat" style="margin:0 0 8px">+ Nueva categoría</button>
+    <button class="btn ghost" data-act="groups" style="margin:0 0 8px">🗂️ Grupos (categorías grandes) · ${(S.cfg.groups || []).length}</button>
     <div class="lab">Gastos</div>${S.cfg.cats.filter(c => c.t === "gasto").map(row).join("")}
     <div class="lab">Ingresos</div>${S.cfg.cats.filter(c => c.t === "ingreso").map(row).join("")}`);
 }
@@ -1767,12 +1777,42 @@ function catForm(c) {
     <div class="seg">${radio("t", "gasto", "Gasto", c.t, isNew ? "" : "disabled")}${radio("t", "ingreso", "Ingreso", c.t, isNew ? "" : "disabled")}</div>
     <div class="two" style="grid-template-columns:80px 1fr"><label class="fld"><span>Ícono</span><input name="i" value="${esc(c.i)}" maxlength="4" style="text-align:center;font-size:22px"></label>
     <label class="fld"><span>Nombre</span><input name="n" value="${esc(c.n)}" maxlength="28" required></label></div>
+    <label class="fld"><span>Grupo (para el análisis)</span><select name="g" id="gSel"></select></label>
+    <div class="note">Ej: Edesur → Servicios. Los grupos los armás en Categorías → Grupos.</div>
     <button class="btn primary">Guardar</button>${isNew ? "" : used ? `<div class="note" style="text-align:center;margin-top:12px">No se puede borrar porque tiene movimientos.</div>` : `<button type="button" class="btn danger" id="delBtn">Eliminar</button>`}</form>`, catsForm);
   const f = $("#f");
+  const drawG = () => { const t = isNew ? val(f, "t") : c.t, cur = $("#gSel").options.length ? $("#gSel").value : c.g || ""; $("#gSel").innerHTML = `<option value="">Sin grupo</option>` + (S.cfg.groups || []).filter(g => g.t === t).map(g => `<option value="${esc(g.id)}" ${g.id === cur ? "selected" : ""}>${esc(g.i)} ${esc(g.n)}</option>`).join(""); };
+  drawG(); f.addEventListener("change", e => { if (e.target.name === "t") drawG(); });
   f.onsubmit = e => { e.preventDefault(); const n = val(f, "n").trim(); if (!n) return;
-    const nc = {id: c.id || gid(), n, i: val(f, "i").trim() || "🏷️", t: isNew ? val(f, "t") : c.t};
+    const nc = {...c, id: c.id || gid(), n, i: val(f, "i").trim() || "🏷️", t: isNew ? val(f, "t") : c.t, g: val(f, "g") || undefined}; if (!nc.g) delete nc.g;
     S.cfg.cats = isNew ? [...S.cfg.cats, nc] : S.cfg.cats.map(x => x.id === nc.id ? nc : x); persist("config"); catsForm(); toast("Categoría guardada"); render(); };
   const del = $("#delBtn"); if (del) twoTap(del, () => { S.cfg.cats = S.cfg.cats.filter(x => x.id !== c.id); const b = {...S.cfg.budgets}; delete b[c.id]; S.cfg.budgets = b; persist("config"); catsForm(); render(); });
+}
+function groupsForm() {
+  const gs = S.cfg.groups || [], cnt = g => S.cfg.cats.filter(c => c.g === g.id).length;
+  const row = g => `<div class="fix"><div class="ico">${esc(g.i)}</div><div class="mid"><b>${esc(g.n)}</b><small>${cnt(g)} categoría${cnt(g) === 1 ? "" : "s"}: ${esc(S.cfg.cats.filter(c => c.g === g.id).map(c => c.n).join(", ") || "ninguna todavía")}</small></div><button class="mini" data-act="editGroup" data-id="${esc(g.id)}">Editar</button></div>`;
+  openSheet(`<h2>Grupos</h2><div class="note">Son categorías más grandes que juntan varias (ej. <b>Servicios</b> = Edesur + Metrogas + Internet). En Análisis podés ver todo por grupo.</div>
+    <button class="btn ghost" data-act="newGroup" style="margin:10px 0 8px">+ Nuevo grupo</button>
+    ${gs.length ? `<div class="lab">Gastos</div>${gs.filter(g => g.t === "gasto").map(row).join("") || `<div class="empty">—</div>`}<div class="lab">Ingresos</div>${gs.filter(g => g.t === "ingreso").map(row).join("") || `<div class="empty">—</div>`}` : `<div class="empty">Todavía no armaste grupos.</div>`}`, catsForm);
+}
+function groupForm(g) {
+  const isNew = !g; g = g || {n: "", i: "🗂️", t: "gasto"};
+  openSheet(`<h2>${isNew ? "Nuevo grupo" : "Editar grupo"}</h2><form id="f">
+    <div class="seg">${radio("t", "gasto", "Gastos", g.t, isNew ? "" : "disabled")}${radio("t", "ingreso", "Ingresos", g.t, isNew ? "" : "disabled")}</div>
+    <div class="two" style="grid-template-columns:80px 1fr"><label class="fld"><span>Ícono</span><input name="i" value="${esc(g.i)}" maxlength="4" style="text-align:center;font-size:22px"></label>
+    <label class="fld"><span>Nombre</span><input name="n" value="${esc(g.n)}" maxlength="28" placeholder="Ej: Servicios" required></label></div>
+    <div class="lab">¿Qué categorías entran en este grupo?</div><div id="gCats"></div>
+    <button class="btn primary">Guardar</button>${isNew ? "" : `<button type="button" class="btn danger" id="delBtn">Eliminar grupo</button>`}</form>`, groupsForm);
+  const f = $("#f");
+  const drawC = () => { const t = isNew ? val(f, "t") : g.t; $("#gCats").innerHTML = S.cfg.cats.filter(c => c.t === t).map(c => { const other = c.g && c.g !== g.id && grp(c.g);
+    return `<label class="chk"><input type="checkbox" name="gc" value="${esc(c.id)}" ${c.g && c.g === g.id ? "checked" : ""}> <span>${esc(c.i)} ${esc(c.n)}${other ? ` <small style="color:var(--mute);font-weight:500">(ahora en ${esc(other.n)})</small>` : ""}</span></label>`; }).join(""); };
+  drawC(); f.addEventListener("change", e => { if (e.target.name === "t") drawC(); });
+  f.onsubmit = e => { e.preventDefault(); const n = val(f, "n").trim(); if (!n) return;
+    const ng = {id: g.id || gid(), n, i: val(f, "i").trim() || "🗂️", t: isNew ? val(f, "t") : g.t}, pick = new Set([...f.querySelectorAll('input[name="gc"]:checked')].map(x => x.value));
+    S.cfg.groups = isNew ? [...(S.cfg.groups || []), ng] : (S.cfg.groups || []).map(x => x.id === ng.id ? ng : x);
+    S.cfg.cats = S.cfg.cats.map(c => { if (pick.has(c.id)) return {...c, g: ng.id}; if (c.g === ng.id) { const {g: _, ...r} = c; return r; } return c; });
+    persist("config"); groupsForm(); toast("Grupo guardado"); render(); };
+  if (!isNew) twoTap($("#delBtn"), () => { S.cfg.groups = (S.cfg.groups || []).filter(x => x.id !== g.id); S.cfg.cats = S.cfg.cats.map(c => { if (c.g !== g.id) return c; const {g: _, ...r} = c; return r; }); persist("config"); groupsForm(); toast("Grupo eliminado"); render(); });
 }
 function usdForm() {
   const opt = (v, l, cur) => `<option value="${v}" ${v === cur ? "selected" : ""}>${l}</option>`;
@@ -1929,6 +1969,10 @@ document.addEventListener("click", e => {
     case "cardDates": cardDatesForm(id); break;
     case "cardBuy": cardBuy(id); break;
     case "calendar": calendarForm(); break;
+    case "groups": groupsForm(); break;
+    case "newGroup": groupForm(); break;
+    case "editGroup": groupForm(grp(id)); break;
+    case "anaBy": S.anaSel = null; S.anaBy = id; render(); break;
     case "calPick": S.month = id; S.tab = "movs"; closeSheet(); window.scrollTo(0, 0); render(); break;
     case "calYear": calendarForm(Number(id)); break;
     case "anaSeg": S.anaSel = null; S.ana = id; render(); break;
