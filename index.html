@@ -933,9 +933,10 @@ function vCards() {
   });
   html += `<button class="btn ghost" data-act="newCard" style="margin:0 0 12px">+ Agregar tarjeta</button>`;
   if (S.cfg.cards.length) {
-    const vals = []; for (let j = 0; j < 6; j++) vals.push(sched[j].reduce((t, s) => t + s.amt, 0));
+    /* solo tu parte: sin lo de las otras personas y restando tus reintegros */
+    const vals = []; for (let j = 0; j < 6; j++) vals.push(S.cfg.cards.reduce((t, c) => t + myCardPart(c.id, addM(M, j)), 0));
     const max = Math.max(...vals, 1);
-    html += `<div class="card"><h3>Lo que viene en tarjetas</h3><div class="vbars">${vals.map((v, j) => `<div class="vb ${j === 0 ? "cur" : ""}"><em>${v ? (v >= 1e6 ? (v / 1e6).toFixed(1).replace(".", ",") + "M" : Math.round(v / 1000) + "k") : ""}</em><i style="height:${(v / max * 100).toFixed(1)}%"></i><span style="margin-top:5px">${mShort(addM(S.month, j))}</span></div>`).join("")}</div><div class="note" style="margin-top:8px">Total de cada resumen (por mes de cierre), sumando todas tus tarjetas.</div></div>`;
+    html += `<div class="card"><h3>Lo que viene en tarjetas (lo tuyo)</h3><div class="vbars">${vals.map((v, j) => `<div class="vb ${j === 0 ? "cur" : ""}"><em>${v ? (v >= 1e6 ? (v / 1e6).toFixed(1).replace(".", ",") + "M" : Math.round(v / 1000) + "k") : ""}</em><i style="height:${(v / max * 100).toFixed(1)}%"></i><span style="margin-top:5px">${mShort(addM(S.month, j))}</span></div>`).join("")}</div><div class="note" style="margin-top:8px">Lo que pagás vos de cada resumen (por mes de cierre), sumando todas tus tarjetas. No incluye lo de las otras personas.</div></div>`;
   }
   return html;
 }
