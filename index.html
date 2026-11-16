@@ -777,6 +777,15 @@ function vMovs() {
   for (const it of items) { if (it.date !== day) { day = it.date; html += `<div class="day">${dayLabel(day)}</div>`; } html += itemRow(it); }
   return html + `</div>`;
 }
+/* recuadro rápido: lo que te toca pagar a vos de esta tarjeta, este mes y los que vienen */
+function mineBox(c, M) {
+  const part = j => { const ym = addM(M, j), o = cardShares(c.id, ym)[""] || {ars: 0, usd: 0}; return {ym, ars: o.ars, usd: o.usd, tot: o.ars + o.usd * cardRate(c.id, ym)}; };
+  const now = part(0), next = [1, 2, 3, 4, 5].map(part), paid = cardPaid(c.id, M, ""), left = now.tot - paid;
+  const k = v => Math.abs(v) < 0.5 ? "—" : Math.abs(v) >= 1e6 ? "$" + (v / 1e6).toFixed(1).replace(".", ",") + "M" : "$" + Math.round(v / 1000) + "k";
+  if (Math.abs(now.tot) < 0.5 && next.every(x => Math.abs(x.tot) < 0.5)) return "";
+  return `<div class="split" style="margin-top:10px"><div class="cl" style="align-items:flex-start"><span><b>Lo tuyo en ${mOnly(M)}</b>${Math.abs(now.usd) > 0.004 ? `<small style="display:block;opacity:.85">${money(now.ars)} + ${money(now.usd, "USD")}</small>` : ""}</span><span style="text-align:right"><b style="font-size:17px">${money(now.tot)}</b>${paid > 0.5 ? `<small style="display:block;opacity:.85">${left > 0.5 ? "pagaste " + money(paid) + " · falta " + money(left) : "✓ pagado"}</small>` : ""}</span></div>
+    <div style="display:flex;justify-content:space-between;gap:4px;margin-top:6px;font-size:11px;opacity:.9">${next.map(x => `<div style="text-align:center;flex:1"><div style="opacity:.75">${mShort(x.ym)}</div><b style="font-size:12px">${k(x.tot)}</b></div>`).join("")}</div></div>`;
+}
 function vCards() {
   const M = S.month;
   const sched = []; for (let j = 0; j < 25; j++) sched.push(cardSchedule(addM(M, j)));
@@ -805,6 +814,7 @@ function vCards() {
       ${(c.cierreF || {})[nM] ? `<div class="dt">Próximo: cierra ${fmtDs(closeDateOf(c, nM))} · vence ${fmtDs(vencDateOf(c, nM))}</div>` : ""}
       ${cardUsers(c).length ? `<div class="dt">La usan: vos, ${cardUsers(c).map(esc).join(", ")}</div>` : ""}
       <div class="due">Resumen que pagás en ${mOnly(M)}<b>${money(due)}</b></div>
+      ${mineBox(c, M)}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="pbtn" style="margin:0" data-act="cardBuy" data-id="${esc(c.id)}">+ Cargar compra</button><button class="pbtn${allPays.length ? " on" : ""}" style="margin:0" data-act="cardPay" data-id="${esc(c.id)}">${allPays.length ? "Pagos: " + money(allPays.reduce((t, x) => t + payArs(x), 0)) + " · + pago" : "Registrar pago"}</button></div>
       <button class="pbtn${sr && sr.ok ? " on" : ""}" style="margin:6px 0 0" data-act="stmt" data-id="${esc(c.id)}">${sr ? (sr.ok ? "✓ Resumen controlado · ver reparto" : "⚠️ El resumen no coincide · revisar") : "🧾 Calcular importes del mes"}</button>
       ${usd0 ? `<div class="usdl"><span>Incluye ${money(usd0, "USD")}${rate ? " a " + money(rate) + (ownRate ? " (del resumen)" : " (" + fxName(S.cfg.cardFx || S.cfg.usdSrc) + ")") : " · <b>falta la cotización</b>"}</span><button class="pbtn" style="margin:0" data-act="cardUsd" data-id="${esc(c.id)}">${ownRate ? "Cambiar dólar" : "Usar el del resumen"}</button></div>` : ""}
