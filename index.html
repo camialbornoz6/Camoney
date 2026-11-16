@@ -919,7 +919,18 @@ function vCards() {
       <div class="nm">${esc(c.name)}</div><div class="dt">${ex ? "Cierre " + fmtDs(closeDateOf(c, M)) + " · vence " + fmtDs(vencDateOf(c, M)) : "Cierra ~" + c.cierre + " · vence ~" + c.venc} <button class="pbtn" style="margin:0 0 0 4px;padding:2px 8px" data-act="cardDates" data-id="${esc(c.id)}">${ex ? "Fechas ✓" : "Ajustar fechas"}</button></div>
       ${(c.cierreF || {})[nM] ? `<div class="dt">Próximo: cierra ${fmtDs(closeDateOf(c, nM))} · vence ${fmtDs(vencDateOf(c, nM))}</div>` : ""}
       ${cardUsers(c).length ? `<div class="dt">La usan: vos, ${cardUsers(c).map(esc).join(", ")}</div>` : ""}
-      <div class="due">Resumen de ${rName(M)}<b>${money(due)}</b><small style="display:block;font-size:12px;opacity:.8;font-weight:500">Se paga en ${mOnly(M)}</small></div>
+      ${(() => { const sub = t => `<small style="display:block;font-size:12px;opacity:.8;font-weight:500">${t}</small>`;
+        if (!sr) return `<div class="due">Resumen de ${rName(M)}<b>${money(due)}</b>${sub("Se paga en " + mOnly(M))}</div>`;
+        /* con el resumen ya controlado contra el PDF: cada pago (en pesos o dólares) se resta de lo que falta pagar */
+        const st = sr.st, r = cardRate(c.id, M) || 0, pA = allPays.filter(x => x.cur !== "USD").reduce((t, x) => t + x.amount, 0), pU = allPays.filter(x => x.cur === "USD").reduce((t, x) => t + x.amount, 0);
+        let lA = st.ars - pA, lU = st.usd - pU;
+        if (lA < 0 && lU > 0 && r) { const u = Math.min(lU, -lA / r); lU -= u; lA += u * r; }
+        if (lU < 0 && lA > 0 && r) { const a2 = Math.min(lA, -lU * r); lA -= a2; lU += a2 / r; }
+        lA = Math.max(0, lA); lU = Math.max(0, lU);
+        const tot = money(st.ars) + (st.usd > 0.004 ? " + " + money(st.usd, "USD") : ""), paid = [pA > 0.004 ? money(pA) : "", pU > 0.004 ? money(pU, "USD") : ""].filter(Boolean).join(" + ");
+        if (!paid) return `<div class="due">Resumen de ${rName(M)}<b>${tot}</b>${sub("Según el PDF · se paga en " + mOnly(M))}</div>`;
+        if (lA < 0.5 && lU < 0.005) return `<div class="due">Resumen de ${rName(M)}<b>✓ Pagado</b>${sub("Total " + tot + " · pagaste " + paid)}</div>`;
+        return `<div class="due">Falta pagar del resumen de ${rName(M)}<b>${lA >= 0.5 ? money(lA) : ""}${lA >= 0.5 && lU >= 0.005 ? " + " : ""}${lU >= 0.005 ? money(lU, "USD") : ""}</b>${sub("Total " + tot + " · pagaste " + paid + " · se paga en " + mOnly(M))}</div>`; })()}
       ${mineBox(c, M)}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="pbtn" style="margin:0" data-act="cardBuy" data-id="${esc(c.id)}">+ Cargar compra</button><button class="pbtn${allPays.length ? " on" : ""}" style="margin:0" data-act="cardPay" data-id="${esc(c.id)}">${allPays.length ? "Pagos: " + money(allPays.reduce((t, x) => t + payArs(x), 0)) + " · + pago" : "Registrar pago"}</button></div>
       <button class="pbtn${sr && sr.ok ? " on" : ""}" style="margin:6px 0 0" data-act="stmt" data-id="${esc(c.id)}">${sr ? (sr.ok ? "✓ Resumen controlado · ver reparto" : "⚠️ El resumen no coincide · revisar") : "🧾 Calcular importes del mes"}</button>
