@@ -569,6 +569,12 @@ function cardDueTotal(cid, ym) {
   const st = (S.cfg.stmts || {})[cid + "|" + ym]; if (st) return st.ars + st.usd * cardRate(cid, ym);
   return cardSchedule(ym).filter(s => s.cardId === cid).reduce((t, s) => t + s.amt, 0) - reintTot(cid, ym);
 }
+/* tu parte del resumen (lo que sale de tu bolsillo): el total menos lo de las otras personas */
+function myCardPart(cid, ym) {
+  if ((S.cfg.stmts || {})[cid + "|" + ym]) { const r = stmtCalc(cid, ym), yo = r && r.ppl.find(p => !p.who); return yo ? yo.totArs + yo.totUsd * cardRate(cid, ym) : 0; }
+  const others = owedBy(cardSchedule(ym).filter(s => s.cardId === cid)).reduce((t, p) => t + p.total, 0);
+  return cardDueTotal(cid, ym) - others;
+}
 function stats(ym) {
   const items = S.months[ym] || [];
   let ing = 0, ingBud = 0, direct = 0; const byMethod = {efectivo: 0, debito: 0, mp: 0, tarjetas: 0}, byCat = {}, byCatAll = {}; let fromExtra = 0;
@@ -673,7 +679,7 @@ function vInicio() {
   const hasData = (S.months[M] || []).length || st.cards;
   /* resúmenes del mes que todavía no tienen el pago registrado en Gastos */
   let cardsLeft = 0; const unpaid = [];
-  for (const c of S.cfg.cards) { const due = cardDueTotal(c.id, M), left = Math.max(0, due - cardPaid(c.id, M)); cardsLeft += left; if (due > 0.5 && !cardPays(c.id, M).length) unpaid.push(c.name); }
+  for (const c of S.cfg.cards) { const due = myCardPart(c.id, M), left = Math.max(0, due - cardPaid(c.id, M)); cardsLeft += left; if (due > 0.5 && !cardPays(c.id, M).length) unpaid.push(c.name); }
   if (unpaid.length && M <= ymOf(todayStr())) alerts.push(`<div class="alert info">💳 Falta registrar el pago de ${esc(unpaid.join(" y "))}<button data-tab="cards">Ver</button></div>`);
   return `
   <div class="qbar"><button class="qbtn" data-act="quick">⚡ Registro rápido de gasto</button></div>
@@ -684,7 +690,7 @@ function vInicio() {
     <div class="grid">
       <div>Ingresos<b style="color:var(--in-on-acc)">${money(st.ing)}</b></div>
       <div>Gastos del mes<b style="color:var(--out-on-acc)">${money(st.direct)}</b></div>
-      <div>Tarjetas por pagar<b style="color:var(--out-on-acc)">${money(cardsLeft)}</b></div>
+      <div>Tu parte de tarjetas por pagar<b style="color:var(--out-on-acc)">${money(cardsLeft)}</b></div>
       <div>Ahorrado<b>${money(st.ahorro)}</b></div>
     </div>${cmp}
   </div>
@@ -771,7 +777,7 @@ function vCards() {
   if (owe.length) {
     const pend = owe.reduce((t, p) => t + p.pend, 0);
     html += `<div class="card"><h3>Lo que te tienen que pagar en ${mOnly(M)}</h3>${owe.map(p => `<div class="owe"><div class="ico">${p.pend > 0.004 ? "🧾" : "✅"}</div><div class="mid"><b>${esc(p.who)}</b><small>${Object.keys(p.cards).map(id => esc((card(id) || {}).name || "Tarjeta")).join(" · ")}</small></div><div style="text-align:right"><b style="color:${p.pend > 0.004 ? "var(--out)" : "var(--mute)"}">${money(p.pend > 0.004 ? p.pend : p.total)}</b><small style="display:block;color:var(--mute);font-size:12px">${p.pend > 0.004 ? (p.pend < p.total - 0.004 ? "falta de " + money(p.total) : "pendiente") : "pagó todo"}</small></div></div>`).join("")}
-      <div class="note" style="margin-top:8px">${pend > 0.004 ? "Falta cobrar " + money(pend) + ". " : ""}Vos pagás el resumen completo. Cuando te devuelvan la plata, tocá “¿Pagó?” en la tarjeta: queda marcado y anotado como ingreso.</div></div>`;
+      <div class="note" style="margin-top:8px">${pend > 0.004 ? "Falta cobrar " + money(pend) + ". " : ""}Tocá “¿Pagó?” en la tarjeta cuando cada uno te pase su parte para pagar el resumen.</div></div>`;
   }
   S.cfg.cards.forEach((c, i) => {
     const mine = j => sched[j].filter(s => s.cardId === c.id);
@@ -794,7 +800,7 @@ function vCards() {
       <button class="pbtn${sr && sr.ok ? " on" : ""}" style="margin:6px 0 0" data-act="stmt" data-id="${esc(c.id)}">${sr ? (sr.ok ? "✓ Resumen controlado · ver reparto" : "⚠️ El resumen no coincide · revisar") : "🧾 Calcular importes del mes"}</button>
       ${usd0 ? `<div class="usdl"><span>Incluye ${money(usd0, "USD")}${rate ? " a " + money(rate) + (ownRate ? " (del resumen)" : " (" + fxName(S.cfg.cardFx || S.cfg.usdSrc) + ")") : " · <b>falta la cotización</b>"}</span><button class="pbtn" style="margin:0" data-act="cardUsd" data-id="${esc(c.id)}">${ownRate ? "Cambiar dólar" : "Usar el del resumen"}</button></div>` : ""}
       <div class="row"><div>En ${mOnly(addM(M, 1))}<b>${money(next)}</b></div><div style="text-align:right">Cuotas que faltan pagar<b>${money(future)}</b></div></div>
-      ${ppl.length ? `<div class="split"><div class="cl"><span>Tuyo</span><b>${money(own)}</b></div>${ppl.map(p => { const pd = isPaid(c.id, M, p.who); return `<div class="cl"><span>${esc(p.who)}</span><span><b>${money(p.total)}</b><button class="pbtn${pd ? " on" : ""}" data-act="personPaid" data-id="${esc(c.id)}" data-who="${esc(p.who)}">${pd ? "✓ Pagó" : "¿Pagó?"}</button></span></div>`; }).join("")}</div>` : ""}
+      ${ppl.length ? `<div class="split"><div class="cl"><span>Tuyo</span><b>${money(own)}</b></div>${ppl.map(p => { const pd = isPaid(c.id, M, p.who); return `<div class="cl"><span>${esc(p.who)}</span><span><b>${money(p.total)}</b><button class="pbtn${pd ? " on" : ""}" data-act="togglePaid" data-id="${esc(c.id)}" data-who="${esc(p.who)}">${pd ? "✓ Pagó" : "¿Pagó?"}</button></span></div>`; }).join("")}</div>` : ""}
       ${list.length ? `<details><summary>Detalle de ${mOnly(M)} (${list.length})</summary>${list.map(s => `<div class="cl" data-act="editMov" data-id="${esc(s.mov.id)}" style="cursor:pointer"><span>${esc(s.mov.note || cat(s.mov.cat).n)}${s.n > 1 ? ` · cuota ${s.k}/${s.n}` : ""}${s.who ? `<span class="tg">${esc(s.who)}</span>` : ""}</span><b>${s.usd ? money(s.usd, "USD") : money(s.amt)}</b></div>`).join("")}</details>` : ""}
       ${rl.length ? `<div class="split"><div class="cl"><span><b>Reintegros de ${mOnly(M)}</b></span><b>−${money(rTot)}</b></div>${rl.map(r => `<div class="cl" data-act="reint" data-id="${esc(c.id)}" data-rid="${esc(r.id)}" style="cursor:pointer"><span>${esc(r.note || "Reintegro")}${r.who ? `<span class="tg">${esc(r.who)}</span>` : ""}</span><b>−${money(r.amount)}</b></div>`).join("")}</div>` : ""}
       ${running.length ? `<details><summary>Compras en curso (${running.length})</summary>${running.map(it => { const st0 = startOf(it), n = Math.max(1, it.cuotas || 1), k = diffM(st0, M) + 1, cur = isUsd(it) ? "USD" : "ARS";
@@ -1018,7 +1024,7 @@ function cardPayForm(cid) {
   const c = card(cid); if (!c) return; const M = S.month, ex = cardPays(cid, M);
   if (ex.length) { movForm(ex[0]); return; }
   const t = todayStr();
-  movForm({type: "gasto", amount: Math.round(cardDueTotal(cid, M) * 100) / 100 || "", date: ymOf(t) === M ? t : vencDateOf(c, M), cat: S.cfg.cats.some(x => x.id === "pagotj") ? "pagotj" : "", method: "debito", cuotas: 1, note: "Pago " + c.name + " · " + mOnly(M), cardPay: cid + "|" + M, _new: true}, null, "plain");
+  movForm({type: "gasto", amount: Math.round(myCardPart(cid, M) * 100) / 100 || "", date: ymOf(t) === M ? t : vencDateOf(c, M), cat: S.cfg.cats.some(x => x.id === "pagotj") ? "pagotj" : "", method: "debito", cuotas: 1, note: "Pago " + c.name + " · " + mOnly(M), cardPay: cid + "|" + M, _new: true}, null, "plain");
 }
 
 function movForm(it, onDone, mode) {
@@ -1028,7 +1034,7 @@ function movForm(it, onDone, mode) {
   if (!CM && String(m.method).startsWith("card:")) m.method = "efectivo";
   openSheet(`<h2>${CM ? (isNew ? "Compra con tarjeta" : "Editar compra con tarjeta") : m.cardPay ? "Pago de la tarjeta" : isNew ? "Nuevo movimiento" : "Editar movimiento"}</h2>
   ${CM && isNew ? `<div class="note" style="margin-bottom:8px">Si es una compra que ya venías pagando, poné la fecha de compra o elegí en qué cuota va: la app calcula el resto.</div>` : ""}
-  ${m.cardPay ? `<div class="note" style="margin-bottom:8px">Anotá lo que pagaste del resumen y con qué. Esto es lo que cuenta como gasto del mes.</div>` : ""}
+  ${m.cardPay ? `<div class="note" style="margin-bottom:8px">Anotá lo que pusiste vos para pagar el resumen y con qué (lo de las otras personas va directo a la tarjeta). Esto es lo que cuenta como gasto del mes.${(() => { const [cid, ym] = m.cardPay.split("|"), tot = cardDueTotal(cid, ym), mine = myCardPart(cid, ym); return tot - mine > 0.5 ? " Total del resumen: " + money(tot) + " · tu parte: " + money(mine) + "." : ""; })()}</div>` : ""}
   <form id="f" autocomplete="off">
     <div class="seg${CM ? " hidden" : ""}">${radio("type", "gasto", "Gasto", m.type)}${radio("type", "ingreso", "Ingreso", m.type)}</div>
     <div class="bigin"><span id="curSym">$</span><input name="amount" inputmode="decimal" placeholder="0" value="${m.amount !== "" ? numIn(m.amount) : ""}"></div>
@@ -1287,31 +1293,6 @@ function reintForm(cid, rid) {
     const nr = {id: r ? r.id : gid(), amount, note: val(f, "note").trim(), who: val(f, "who")};
     save(isNew ? [...list, nr] : list.map(x => x.id === nr.id ? nr : x)); toast("Reintegro guardado"); };
   if (!isNew) twoTap($("#delBtn"), () => { save(list.filter(x => x.id !== r.id)); toast("Reintegro eliminado"); });
-}
-/* ¿pagó? marca a la persona como pagada en ese resumen y, si querés, anota lo que te devolvió como ingreso */
-function personPaidForm(cid, who) {
-  const c = card(cid); if (!c) return; const M = S.month, k = paidKey(cid, M, who);
-  const linked = allItems().filter(i => i.paidKey === k);
-  if (isPaid(cid, M, who)) {
-    openSheet(`<h2>${esc(who)} ya pagó</h2><div class="note">${esc(c.name)} · resumen de ${mName(M)}.${linked.length ? " Está anotado como ingreso: " + linked.map(i => money(i.amount) + " el " + fmtDs(i.date)).join(", ") + "." : ""}</div>
-      <button class="btn danger" id="unBtn">Desmarcar${linked.length ? " y borrar el ingreso" : ""}</button>`);
-    twoTap($("#unBtn"), () => { const p = {...(S.cfg.paid || {})}; delete p[k]; S.cfg.paid = p; persist("config"); linked.forEach(removeMov); closeSheet(); toast("Desmarcado"); render(); });
-    return;
-  }
-  const o = owedBy(cardSchedule(M).filter(s => s.cardId === cid)).find(x => x.who === who), amt = o ? Math.round(o.total * 100) / 100 : 0;
-  const t = todayStr(), inc = S.cfg.cats.find(x => x.id === "reint") || S.cfg.cats.find(x => x.t === "ingreso");
-  openSheet(`<h2>¿${esc(who)} te pagó?</h2><div class="note">${esc(c.name)} · resumen de ${mName(M)}. Le corresponde pagar ${money(amt)}.</div><form id="f">
-    <div class="bigin" style="margin-top:12px"><span>$</span><input name="amount" inputmode="decimal" value="${amt > 0 ? numIn(amt) : ""}" placeholder="0"></div>
-    <label class="chk" style="margin-top:0"><input type="checkbox" name="asInc" checked> <span>Anotarlo como ingreso en ${esc(inc ? inc.n : "ingresos")}</span></label>
-    <div id="incBox"><div class="lab">¿Cómo te pagó?</div><div class="chips">${BASE_METHODS.map(m => radio("method", m.id, m.i + " " + m.n, "mp")).join("")}</div>
-    <label class="fld"><span>Fecha</span><input type="date" name="date" value="${ymOf(t) >= M ? t : vencDateOf(c, M)}"></label></div>
-    <button class="btn primary">Marcar que pagó</button></form>`);
-  const f = $("#f");
-  f.addEventListener("change", e => { if (e.target.name === "asInc") $("#incBox").classList.toggle("hidden", !e.target.checked); });
-  f.onsubmit = e => { e.preventDefault(); const p = {...(S.cfg.paid || {})}; p[k] = true; S.cfg.paid = p; persist("config");
-    const a = parseAmt(val(f, "amount")), d = val(f, "date");
-    if (f.elements.asInc.checked && a > 0 && inc && /^\d{4}-\d{2}-\d{2}$/.test(d)) upsertMov({id: gid(), ts: Date.now(), type: "ingreso", amount: a, date: d, cat: inc.id, method: val(f, "method") || "mp", cuotas: 1, note: who + " · " + c.name + " " + mOnly(M), paidKey: k}, null);
-    closeSheet(); toast(who + " pagó ✓"); render(); };
 }
 /* fechas reales de un resumen puntual (opcional): se guardan por mes de vencimiento */
 function cardDatesForm(cid) {
@@ -1820,7 +1801,6 @@ document.addEventListener("click", e => {
     case "cardBuy": cardBuy(id); break;
     case "cardPay": cardPayForm(id); break;
     case "reint": reintForm(id, el.dataset.rid); break;
-    case "personPaid": personPaidForm(id, el.dataset.who); break;
     case "stmt": if ((S.cfg.stmts || {})[id + "|" + S.month]) stmtResult(id, S.month); else stmtForm(id); break;
     case "weekly": weeklyForm(); break;
     case "people": peopleForm(); break;
