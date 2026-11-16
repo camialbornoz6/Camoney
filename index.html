@@ -882,6 +882,18 @@ function vAnalisis() {
     <div class="legrow" style="font-weight:800"><span class="nm">Total</span><b>${money(total)}</b></div></div>`;
   return html;
 }
+/* agrupa un resumen por persona ("" = vos): sus compras, reintegros y total */
+function pplOf(list, rl) {
+  const whos = [...new Set(["", ...list.map(s => s.who), ...rl.map(r => r.who || "")])];
+  return whos.map(w => { const its = list.filter(s => s.who === w), rs = rl.filter(r => (r.who || "") === w); return {who: w, its, rs, total: its.reduce((t, s) => t + s.amt, 0) - rs.reduce((t, r) => t + r.amount, 0)}; }).filter(p => p.its.length || p.rs.length);
+}
+/* una fila desplegable por persona; withPaid muestra "¿Pagó?" (solo en el resumen actual) */
+function pplHtml(c, M, ppl, key, withPaid) {
+  return ppl.map(p => { const pd = p.who && isPaid(c.id, M, p.who), n = p.its.length + p.rs.length;
+    return `<details data-k="${esc(key)}-${esc(p.who)}" style="margin-top:6px;background:rgba(0,0,0,.12)"><summary style="display:flex;align-items:center;justify-content:space-between;gap:8px;list-style:none"><span><i class="chev">›</i> ${p.who ? "👤 " + esc(p.who) : "🙋 Yo"} <small style="font-weight:500;opacity:.8">· ${n} ${n === 1 ? "compra" : "compras"}</small></span><span style="display:flex;align-items:center;gap:6px"><b style="white-space:nowrap">${money(p.total)}</b>${withPaid && p.who ? `<button class="pbtn${pd ? " on" : ""}" style="margin:0" data-act="togglePaid" data-id="${esc(c.id)}" data-who="${esc(p.who)}">${pd ? "✓ Pagó" : "¿Pagó?"}</button>` : ""}</span></summary>
+      ${p.its.map(s => `<div class="cl" data-act="editMov" data-id="${esc(s.mov.id)}" style="cursor:pointer"><span>${esc(buyLbl(s.mov))}${s.n > 1 ? ` · cuota ${s.k}/${s.n}` : ""}<small style="display:block;opacity:.75">${fmtDs(s.mov.date)}</small></span><b>${s.usd ? money(s.usd, "USD") : money(s.amt)}</b></div>`).join("")}
+      ${p.rs.map(r => `<div class="cl"${withPaid ? ` data-act="reint" data-id="${esc(c.id)}" data-rid="${esc(r.id)}" style="cursor:pointer"` : ""}><span>Reintegro${r.note ? ": " + esc(r.note) : ""}</span><b>−${money(r.amount)}</b></div>`).join("")}</details>`; }).join("");
+}
 function vCards() {
   const M = cardM();
   const sched = []; for (let j = 0; j < 25; j++) sched.push(cardSchedule(addM(M, j)));
@@ -895,14 +907,13 @@ function vCards() {
   }
   S.cfg.cards.forEach((c, i) => {
     const mine = j => sched[j].filter(s => s.cardId === c.id);
-    const due = mine(0).reduce((t, s) => t + s.amt, 0) - reintTot(c.id, M), next = mine(1).reduce((t, s) => t + s.amt, 0);
+    const due = mine(0).reduce((t, s) => t + s.amt, 0) - reintTot(c.id, M);
     const list = mine(0).sort((a, b) => (a.who > b.who ? 1 : a.who < b.who ? -1 : 0) || b.amt - a.amt);
     const usd0 = list.reduce((t, s) => t + s.usd, 0), rate = cardRate(c.id, M), ownRate = (S.cfg.cardUsd || {})[c.id + "|" + M];
     const rl = reintList(c.id, M), rTot = rl.reduce((t, r) => t + r.amount, 0);
     const allPays = cardPays(c.id, M).sort((a, b) => a.date.localeCompare(b.date));
     /* detalle por persona: lo que lleva cada uno en este resumen y, al abrirlo, sus compras */
-    const whos = [...new Set(["", ...list.map(s => s.who), ...rl.map(r => r.who || "")])];
-    const ppl = whos.map(w => { const its = list.filter(s => s.who === w), rs = rl.filter(r => (r.who || "") === w); return {who: w, its, rs, total: its.reduce((t, s) => t + s.amt, 0) - rs.reduce((t, r) => t + r.amount, 0)}; }).filter(p => p.its.length || p.rs.length);
+    const ppl = pplOf(list, rl);
     const ex = !!((c.cierreF || {})[M] || (c.cierres || {})[M]), nM = addM(M, 1), sr = (S.cfg.stmts || {})[c.id + "|" + M] ? stmtCalc(c.id, M) : null;
     html += `<div class="ccard" style="background:${esc(c.color || CARD_COLORS[i % CARD_COLORS.length])}">
       <button class="edit" data-act="editCard" data-id="${esc(c.id)}">Editar</button>
@@ -914,12 +925,10 @@ function vCards() {
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="pbtn" style="margin:0" data-act="cardBuy" data-id="${esc(c.id)}">+ Cargar compra</button><button class="pbtn${allPays.length ? " on" : ""}" style="margin:0" data-act="cardPay" data-id="${esc(c.id)}">${allPays.length ? "Pagos: " + money(allPays.reduce((t, x) => t + payArs(x), 0)) + " · + pago" : "Registrar pago"}</button></div>
       <button class="pbtn${sr && sr.ok ? " on" : ""}" style="margin:6px 0 0" data-act="stmt" data-id="${esc(c.id)}">${sr ? (sr.ok ? "✓ Resumen controlado · ver reparto" : "⚠️ El resumen no coincide · revisar") : "🧾 Calcular importes del mes"}</button>
       ${usd0 ? `<div class="usdl"><span>Incluye ${money(usd0, "USD")}${rate ? " a " + money(rate) + (ownRate ? " (del resumen)" : " (" + fxName(S.cfg.cardFx || S.cfg.usdSrc) + ")") : " · <b>falta la cotización</b>"}</span><button class="pbtn" style="margin:0" data-act="cardUsd" data-id="${esc(c.id)}">${ownRate ? "Cambiar dólar" : "Usar el del resumen"}</button></div>` : ""}
-      <div class="row"><div>Resumen de ${rName(addM(M, 1))}<b>${money(next)}</b></div></div>
-      ${ppl.length ? `<details data-k="det-${esc(c.id)}"><summary>Detalle de ${rName(M)} (${list.length + rl.length})</summary>${ppl.map(p => { const pd = p.who && isPaid(c.id, M, p.who);
-        return `<details data-k="det-${esc(c.id)}-${esc(p.who)}" style="margin-top:6px;background:rgba(0,0,0,.12)"><summary style="display:flex;align-items:center;justify-content:space-between;gap:8px;list-style:none"><span><i class="chev">›</i> ${p.who ? "👤 " + esc(p.who) : "🙋 Yo"} <small style="font-weight:500;opacity:.8">· ${p.its.length + p.rs.length} ${p.its.length + p.rs.length === 1 ? "compra" : "compras"}</small></span><span style="display:flex;align-items:center;gap:6px"><b>${money(p.total)}</b>${p.who ? `<button class="pbtn${pd ? " on" : ""}" style="margin:0" data-act="togglePaid" data-id="${esc(c.id)}" data-who="${esc(p.who)}">${pd ? "✓ Pagó" : "¿Pagó?"}</button>` : ""}</span></summary>
-          ${p.its.map(s => `<div class="cl" data-act="editMov" data-id="${esc(s.mov.id)}" style="cursor:pointer"><span>${esc(buyLbl(s.mov))}${s.n > 1 ? ` · cuota ${s.k}/${s.n}` : ""}<small style="display:block;opacity:.75">${fmtDs(s.mov.date)}</small></span><b>${s.usd ? money(s.usd, "USD") : money(s.amt)}</b></div>`).join("")}
-          ${p.rs.map(r => `<div class="cl" data-act="reint" data-id="${esc(c.id)}" data-rid="${esc(r.id)}" style="cursor:pointer"><span>Reintegro${r.note ? ": " + esc(r.note) : ""}</span><b>−${money(r.amount)}</b></div>`).join("")}</details>`; }).join("")}</details>` : ""}
+      ${ppl.length ? `<details data-k="det-${esc(c.id)}"><summary>Detalle de ${rName(M)} (${list.length + rl.length})</summary>${pplHtml(c, M, ppl, "det-" + c.id, true)}</details>` : ""}
       ${allPays.length ? `<details data-k="pay-${esc(c.id)}"><summary>Pagos del resumen de ${rName(M)} (${allPays.length})</summary>${allPays.map(x => `<div class="cl" data-act="editMov" data-id="${esc(x.id)}" style="cursor:pointer"><span>${fmtDs(x.date)} · ${esc(x.who || "Yo")}</span><b>${money(x.amount, x.cur || "ARS")}</b></div>`).join("")}</details>` : ""}
+      ${(() => { const ms = [1, 2, 3, 4, 5, 6].map(j => { const ym = addM(M, j), l = mine(j).sort((a, b) => b.amt - a.amt), r = reintList(c.id, ym); return {ym, l, r, tot: l.reduce((t, s) => t + s.amt, 0) - r.reduce((t, x) => t + x.amount, 0)}; }).filter(x => x.l.length || x.r.length);
+        return ms.length ? `<details data-k="fut-${esc(c.id)}"><summary>Próximos meses</summary>${ms.map(x => `<details data-k="fut-${esc(c.id)}-${x.ym}" style="margin-top:6px;background:rgba(0,0,0,.12)"><summary style="display:flex;align-items:center;justify-content:space-between;gap:8px;list-style:none"><span><i class="chev">›</i> Resumen de ${rName(x.ym)} <small style="font-weight:500;opacity:.8">· se paga en ${mOnly(x.ym)}</small></span><b style="white-space:nowrap">${money(x.tot)}</b></summary>${pplHtml(c, x.ym, pplOf(x.l, x.r), "fut-" + c.id + "-" + x.ym, false)}</details>`).join("")}</details>` : ""; })()}
     </div>`;
   });
   html += `<button class="btn ghost" data-act="newCard" style="margin:0 0 12px">+ Agregar tarjeta</button>`;
