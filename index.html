@@ -734,7 +734,7 @@ function budgetCard(M, st) {
   const otros = Object.entries(st.byCat).filter(([id, v]) => v > 0.004 && !cats.some(c => c.id === id)).sort((a, z) => z[1] - a[1]);
   const otrosT = otros.reduce((t, [, v]) => t + v, 0), left = totB - totS, sinAsig = st.ingBud - totB, extra = st.ing - st.ingBud;
   return `<div class="card"><h3>Presupuesto de ${mOnly(M)} <button class="link" data-act="budgets">Editar</button></h3>
-    ${own ? "" : `<div class="alert info">${from ? "Estás usando el presupuesto de " + mOnly(from) : "Estás usando tus topes generales"}<button data-act="budgets">Armar el de ${mOnly(M)}</button></div>`}
+    ${own ? "" : `<div class="alert info">${from ? "Estás usando el presupuesto de " + mOnly(from) : "Estás usando tus topes generales"}<button data-act="budgets">Armar el de ${mOnly(M)}</button></div>${prevBudget(M) ? `<button class="btn ghost" data-act="budgetsCopy" style="margin:0 0 10px">📋 Copiar del mes pasado y ajustar</button>` : ""}`}
     <div class="tiles" style="margin-bottom:14px"><div class="tile"><span>Presupuestado</span><b>${money(totB)}</b></div><div class="tile"><span>Te queda</span><b style="color:${left < 0 ? "var(--out)" : "var(--in)"}">${money(left)}</b></div></div>
     <div class="bars">${rows}</div>
     ${st.fromExtra > 0.004 ? `<div class="note" style="margin-top:10px">✨ Pagado con ingresos extra (no resta del presupuesto): <b>${money(st.fromExtra)}</b></div>` : ""}
@@ -1650,6 +1650,8 @@ function regFixed(id) {
   $("#sheetIn h2").textContent = "Registrar " + fx.name;
   const del = $("#delBtn"); if (del) del.remove();
 }
+/* montos del presupuesto del mes anterior (el propio, o el que venía usando ese mes) */
+function prevBudget(M) { const b = budFor(addM(M, -1)).b || {}; return Object.values(b).some(v => Number(v) > 0) ? {...b} : null; }
 function budgetsForm(draft) {
   const M = S.month, cur = budFor(M), vals = draft || cur.b, st = stats(M);
   const incs = (S.months[M] || []).filter(i => i.type === "ingreso").sort((a, b) => a.date.localeCompare(b.date) || (a.ts || 0) - (b.ts || 0));
@@ -1661,6 +1663,7 @@ function budgetsForm(draft) {
     <form id="f">
     <div class="lab">2 · Cuánto le das a cada categoría</div>
     ${!cur.own && cur.from && !draft ? `<div class="note">Te dejé cargados los montos de ${mOnly(cur.from)}; cambiá los que quieras.</div>` : ""}
+    <button type="button" class="btn ghost" id="copyPrev" style="margin:4px 0 8px">📋 Copiar del mes pasado (${mOnly(addM(M, -1))})</button>
     ${gastoCats().map(c => { const sp = st.byCat[c.id] || 0, v = Number(vals[c.id]) || 0; return `<div class="budrow"><span>${esc(c.i)} ${esc(c.n)}${sp > 0.004 ? `<small>Ya gastaste ${money(sp)}</small>` : ""}</span><input name="b_${esc(c.id)}" inputmode="decimal" placeholder="—" value="${v > 0 ? numIn(v) : ""}"></div>`; }).join("")}
     <div class="bsum" id="bsum"></div>
     <button class="btn primary">Guardar presupuesto</button>
@@ -1670,6 +1673,10 @@ function budgetsForm(draft) {
   const sum = () => { const tot = Object.values(read()).reduce((t, v) => t + v, 0), rest = st.ingBud - tot;
     $("#bsum").innerHTML = `Ingresos que cuentan <b>${money(st.ingBud)}</b> · Presupuestado <b>${money(tot)}</b><br>${st.ingBud ? (rest >= 0 ? `Sin asignar: <b style="color:var(--in)">${money(rest)}</b>` : `Te pasás de tus ingresos por <b style="color:var(--out)">${money(-rest)}</b>`) : "Cargá tus ingresos para ver cuánto te queda por repartir"}`; };
   sum(); f.addEventListener("input", sum);
+  /* copia los montos del presupuesto del mes anterior en los casilleros; después se pueden cambiar antes de guardar */
+  $("#copyPrev").onclick = () => { const pb = prevBudget(M); if (!pb) { toast("No hay presupuesto armado en " + mOnly(addM(M, -1))); return; }
+    for (const c of gastoCats()) { const v = Number(pb[c.id]) || 0; f.elements["b_" + c.id].value = v > 0 ? numIn(v) : ""; }
+    sum(); toast("Copié los montos de " + mOnly(addM(M, -1)) + ": cambiá los que quieras y guardá"); };
   document.querySelectorAll(".incTog").forEach(b => b.onclick = () => { const it = findMov(b.dataset.id); if (!it) return; const d = read(), sc = $("#sheetBody").scrollTop;
     const nm = {...it}; if (it.noBud) delete nm.noBud; else { nm.noBud = true; nm.cat = extraCatId(true); } upsertMov(nm, it); render(); budgetsForm(d); $("#sheetBody").scrollTop = sc; });
   $("#addInc").onclick = () => { const d = read(); const first = S.cfg.cats.find(c => c.t === "ingreso");
@@ -1854,6 +1861,7 @@ document.addEventListener("click", e => {
     case "cardUsd": cardUsdForm(id); break;
     case "cardDates": cardDatesForm(id); break;
     case "cardBuy": cardBuy(id); break;
+    case "budgetsCopy": { const pb = prevBudget(S.month); budgetsForm(pb || undefined); if (pb) toast("Copié los montos de " + mOnly(addM(S.month, -1)) + ": cambiá los que quieras y guardá"); break; }
     case "cardPay": cardPayForm(id, S.month); break;
     case "reint": reintForm(id, el.dataset.rid); break;
     case "stmt": if ((S.cfg.stmts || {})[id + "|" + S.month]) stmtResult(id, S.month); else stmtForm(id); break;
