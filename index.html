@@ -157,6 +157,7 @@ nav.tabs button.on{color:var(--acc)}
 .grab{width:40px;height:5px;border-radius:9px;background:var(--line);margin:0 auto 6px}
 .shead{position:sticky;top:-10px;z-index:3;background:var(--card);margin:-10px -18px 0;padding:10px 18px 2px;touch-action:none}
 .shead .back{padding:6px 0 4px;font-size:15px}
+.shead .xclose{position:absolute;right:12px;top:12px;width:34px;height:34px;border-radius:50%;border:0;background:var(--line);color:var(--ink);font-size:16px;font-weight:700;line-height:1;cursor:pointer}
 .sheet-body.drag{transition:none}
 .sheet h2{margin:4px 0 14px;font-size:19px;font-weight:800}
 .seg{display:flex;background:var(--bg);border-radius:14px;padding:4px;margin-bottom:12px}
@@ -230,7 +231,7 @@ body.auth nav.tabs,body.auth #fab,body.auth .mswitch{display:none!important}
   <button data-tab="sav"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 7c-1-1.5-3-2-5-2H9C5.7 5 3 7.7 3 11c0 2 1 3.8 2.5 4.9V20h3v-2h5v2h3v-3.3c1-.6 1.8-1.4 2.3-2.4H21v-4h-1.4c-.2-.9-.5-1.7-.6-2.3zM16 11h.01"/></svg>Ahorros</button>
   <button data-tab="mas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>Más</button>
 </nav>
-<div id="sheet" class="sheet hidden"><div class="sheet-bg" id="sheetBg"></div><div class="sheet-body" id="sheetBody"><div class="shead" id="sheetHead"><div class="grab"></div><button class="back" id="sheetBack">‹ Volver</button></div><div id="sheetIn"></div></div></div>
+<div id="sheet" class="sheet hidden"><div class="sheet-bg" id="sheetBg"></div><div class="sheet-body" id="sheetBody"><div class="shead" id="sheetHead"><button class="back" id="sheetBack">‹ Volver</button><button class="xclose" id="sheetX" aria-label="Cerrar">✕</button></div><div id="sheetIn"></div></div></div>
 <div id="toast"></div>
 
 <script>
@@ -1210,7 +1211,7 @@ function movForm(it, onDone, mode) {
     <label class="chk hidden" id="exChk"><input type="checkbox" name="fromExtra" ${m.fromExtra ? "checked" : ""}> <span>Salió de mis ingresos extra <small id="exLeft" style="color:var(--mute);font-weight:500"></small></span></label>
     <label class="chk hidden" id="budChk"><input type="checkbox" name="inBud" ${m.noBud ? "" : "checked"}> Contar este ingreso en el presupuesto del mes</label>
     <label class="fld"><span id="dateLbl">${CM ? "Fecha de compra" : "Fecha"}</span><input type="date" name="date" value="${esc(m.date)}" required></label>
-    <button class="btn primary" type="submit">Guardar</button>
+    <button class="btn primary" type="submit">Guardar</button>${isNew ? `<button class="btn ghost" type="submit" name="again" value="1">Guardar y cargar otra</button>` : ""}
     ${isNew ? "" : `<button type="button" class="btn danger" id="delBtn">Eliminar</button>`}
   </form>`, onDone);
   const f = $("#f");
@@ -1291,6 +1292,9 @@ function movForm(it, onDone, mode) {
   if (isNew) setTimeout(() => f.elements.amount.focus(), 250);
   f.onsubmit = e => {
     e.preventDefault();
+    /* "Guardar y cargar otra": guarda y abre el formulario vacío con la misma tarjeta / medio de pago, fecha y persona */
+    const again = isNew && !!(e.submitter && e.submitter.name === "again");
+    const reopen = nm => { toast("Guardado · cargá la siguiente"); render(); movForm({type: nm.type, amount: "", date: nm.date, cat: "", method: nm.method, cuotas: 1, note: "", ...(CM && nm.who ? {who: nm.who} : {}), _new: true, _lockCard: CM && lockCard}, onDone, CM ? "card" : undefined); };
     const amount = parseAmt(val(f, "amount"));
     if (!(amount > 0)) { toast("Poné un monto válido"); return; }
     if (!val(f, "cat") && !CM) { toast("Elegí una categoría"); return; }
@@ -1329,6 +1333,7 @@ function movForm(it, onDone, mode) {
       ws.forEach((k, j) => upsertMov({...nm, id: j ? gid() : nm.id, amount: am[j], cat: "wk" + k, split: grp, note: (nm.note ? nm.note + " " : "") + "(" + (j + 1) + "/" + ws.length + ")"}, null));
       closeSheet(); toast("Dividido en " + ws.length + " semanas de " + money(amount / ws.length));
       if (ymOf(date) !== S.month) S.month = ymOf(date);
+      if (again) { reopen(nm); return; }
       render(); if (onDone) onDone(); return;
     }
     upsertMov(nm, it && !it._new ? it : null);
@@ -1341,6 +1346,7 @@ function movForm(it, onDone, mode) {
     }
     if (nm.mensual) ensureSubs();
     closeSheet();
+    if (again) { if (ymOf(date) !== S.month) S.month = ymOf(date); reopen(nm); return; }
     let msg = isNew ? (nm.mensual ? "Listo, se va a cargar sola todos los meses" : "Listo, guardado") : subStop ? "Listo, no se carga más en los meses siguientes" : "Cambios guardados";
     if (nm.type === "gasto" && nm.fromExtra) { const l = extraLeft(); msg += l >= 0 ? ` · te quedan ${money(l)} de ingresos extra` : ` · te pasaste ${money(-l)} de tus ingresos extra`; }
     else if (nm.type === "gasto" && !nm.who && !nm.cur && !CM) { const ym = budMonthOf(nm.method, nm.date, nm.startYm), bud = Number(budFor(ym).b[nm.cat]) || 0; if (bud > 0) { const left = bud - (stats(ym).byCat[nm.cat] || 0); msg += left >= 0 ? ` · te quedan ${money(left)} en ${cat(nm.cat).n}` : ` · te pasaste ${money(-left)} en ${cat(nm.cat).n}`; } }
@@ -2053,17 +2059,12 @@ document.addEventListener("click", e => {
   }
 });
 $("#fab").onclick = () => S.tab === "cards" ? cardBuy() : movForm();
-$("#sheetBg").onclick = sheetBack;
+/* tocar afuera de la hoja no la cierra (para no perder lo que se estaba cargando): solo "Volver" o la ✕ */
+$("#sheetX").onclick = closeSheet;
 $("#prevM").onclick = () => { S.month = addM(S.month, -1); render(); };
 $("#mLabel").onclick = () => calendarForm();
 $("#nextM").onclick = () => { S.month = addM(S.month, 1); render(); };
-document.addEventListener("keydown", e => { if (e.key === "Escape" && sheetOpen()) sheetBack(); });
 $("#sheetBack").onclick = sheetBack;
-/* deslizar hacia abajo desde arriba de la hoja para volver */
-(() => { const sb = $("#sheetBody"); let y0 = null, dy = 0;
-  sb.addEventListener("touchstart", e => { const onHead = e.target.closest("#sheetHead"); y0 = (onHead || sb.scrollTop <= 0) && !e.target.closest("input,textarea,select") ? e.touches[0].clientY : null; dy = 0; }, {passive: true});
-  sb.addEventListener("touchmove", e => { if (y0 === null) return; dy = e.touches[0].clientY - y0; if (dy > 0) { sb.classList.add("drag"); sb.style.transform = "translateY(" + dy + "px)"; } else { y0 = null; sb.style.transform = ""; } }, {passive: true});
-  sb.addEventListener("touchend", () => { sb.classList.remove("drag"); if (y0 !== null && dy > 110) { sb.style.transform = ""; sheetBack(); } else sb.style.transform = ""; y0 = null; }); })();
 
 render();
 initStore();
