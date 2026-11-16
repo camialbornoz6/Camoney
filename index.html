@@ -268,7 +268,7 @@ const DEF_CATS = [
 const CARD_COLORS = ["#1F3A5F","#6B2D5C","#2F5D50","#8A4B1E","#3D3A8C","#5A5A5A","#A23B3B"];
 const ACC_TYPES = {efectivo:"Efectivo",mp:"Mercado Pago",banco:"Cuenta bancaria",pf:"Plazo fijo",fci:"FCI / inversión",otro:"Otro"};
 const BASE_METHODS = [{id:"efectivo",n:"Efectivo",i:"💵"},{id:"debito",n:"Débito / transf.",i:"🏦"},{id:"mp",n:"Mercado Pago",i:"📱"}];
-const defCfg = () => ({cats: DEF_CATS.map(c => ({...c})), cards: [], accounts: [], goals: [], budgets: {}, fixed: [], usd: 0, debts: [], people: [], paid: {}, cardUsd: {}, weekly: {amount: 0, cats: ["super", "comida"]}, mbudgets: {}, quick: [], mig: {}, fxHist: {}, usdSrc: "bolsa", cardFx: "tarjeta"});
+const defCfg = () => ({cats: DEF_CATS.map(c => ({...c})), cards: [], accounts: [], goals: [], budgets: {}, fixed: [], usd: 0, debts: [], people: [], paid: {}, cardUsd: {}, weekly: {amount: 0, cats: ["super", "comida"]}, mbudgets: {}, quick: [], mig: {}, fxHist: {}, usdSrc: "bolsa", cardFx: "tarjeta", stmts: {}});
 
 /* ---------- estado ---------- */
 const S = { cfg: defCfg(), months: {}, sav: [], month: ymOf(todayStr()), tab: "inicio", ready: false, mode: "db", filter: {type: "all", method: "all", q: ""} };
@@ -444,11 +444,15 @@ async function initStore() {
 const cierreOf = (c, ym) => Number(((c && c.cierres) || {})[ym]) || (c && c.cierre) || 31;
 const vencOf = (c, ym) => Number(((c && c.vencs) || {})[ym]) || (c && c.venc) || 10;
 const cardUsers = c => c && Array.isArray(c.users) ? c.users : (S.cfg.people || []);
+const lagOf = c => ((c && c.venc) || 10) > ((c && c.cierre) || 31) ? 0 : 1;
+const dimOf = ym => new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0).getDate();
+/* fecha de cierre / vencimiento del resumen que vence en "due": la exacta si salió de un PDF, si no la aproximada */
+function closeDateOf(c, due) { const f = ((c && c.cierreF) || {})[due]; if (f) return f; const cm = addM(due, -lagOf(c)); return cm + "-" + pad(Math.min(cierreOf(c, due), dimOf(cm))); }
+function vencDateOf(c, due) { const f = ((c && c.vencF) || {})[due]; if (f) return f; return due + "-" + pad(Math.min(vencOf(c, due), dimOf(due))); }
 function firstDue(c, date) {
-  const [y, m, d] = date.split("-").map(Number);
-  const cierre = (c && c.cierre) || 31, venc = (c && c.venc) || 10;
-  let due = addM(y + "-" + pad(m), venc > cierre ? 0 : 1);
-  if (d > cierreOf(c, due)) due = addM(due, 1);
+  let due = addM(ymOf(date), lagOf(c));
+  for (let i = 0; i < 3 && date > closeDateOf(c, due); i++) due = addM(due, 1);
+  for (let i = 0; i < 3 && date <= closeDateOf(c, addM(due, -1)); i++) due = addM(due, -1);
   return due;
 }
 /* mes del resumen donde cae la primera cuota: la fecha de compra, o lo que se indicó a mano ("va por la cuota 2") */
@@ -758,11 +762,14 @@ function vCards() {
     const list = mine(0).sort((a, b) => (a.who > b.who ? 1 : a.who < b.who ? -1 : 0) || b.amt - a.amt);
     const usd0 = list.reduce((t, s) => t + s.usd, 0), rate = cardRate(c.id, M), ownRate = (S.cfg.cardUsd || {})[c.id + "|" + M];
     const ppl = owedBy(list), own = list.filter(s => !s.who).reduce((t, s) => t + s.amt, 0);
+    const ex = !!((c.cierreF || {})[M] || (c.cierres || {})[M]), nM = addM(M, 1), sr = (S.cfg.stmts || {})[c.id + "|" + M] ? stmtCalc(c.id, M) : null;
     html += `<div class="ccard" style="background:${esc(c.color || CARD_COLORS[i % CARD_COLORS.length])}">
       <button class="edit" data-act="editCard" data-id="${esc(c.id)}">Editar</button>
-      <div class="nm">${esc(c.name)}</div><div class="dt">${((c.cierres || {})[M] ? "Cierra el " + cierreOf(c, M) : "Cierra ~" + c.cierre) + " · " + ((c.vencs || {})[M] ? "Vence el " + vencOf(c, M) : "vence ~" + c.venc)} <button class="pbtn" style="margin:0 0 0 4px;padding:2px 8px" data-act="cardDates" data-id="${esc(c.id)}">${(c.cierres || {})[M] ? "Fechas de este mes ✓" : "Ajustar fechas"}</button></div>
+      <div class="nm">${esc(c.name)}</div><div class="dt">${ex ? "Cierre " + fmtDs(closeDateOf(c, M)) + " · vence " + fmtDs(vencDateOf(c, M)) : "Cierra ~" + c.cierre + " · vence ~" + c.venc} <button class="pbtn" style="margin:0 0 0 4px;padding:2px 8px" data-act="cardDates" data-id="${esc(c.id)}">${ex ? "Fechas ✓" : "Ajustar fechas"}</button></div>
+      ${(c.cierreF || {})[nM] ? `<div class="dt">Próximo: cierra ${fmtDs(closeDateOf(c, nM))} · vence ${fmtDs(vencDateOf(c, nM))}</div>` : ""}
       ${cardUsers(c).length ? `<div class="dt">La usan: vos, ${cardUsers(c).map(esc).join(", ")}</div>` : ""}
       <div class="due">Resumen que pagás en ${mOnly(M)}<b>${money(due)}</b></div>
+      <button class="pbtn${sr && sr.ok ? " on" : ""}" style="margin:8px 0 0" data-act="stmt" data-id="${esc(c.id)}">${sr ? (sr.ok ? "✓ Resumen controlado · ver reparto" : "⚠️ El resumen no coincide · revisar") : "🧾 Calcular importes del mes"}</button>
       ${usd0 ? `<div class="usdl"><span>Incluye ${money(usd0, "USD")}${rate ? " a " + money(rate) + (ownRate ? " (del resumen)" : " (" + fxName(S.cfg.cardFx || S.cfg.usdSrc) + ")") : " · <b>falta la cotización</b>"}</span><button class="pbtn" style="margin:0" data-act="cardUsd" data-id="${esc(c.id)}">${ownRate ? "Cambiar dólar" : "Usar el del resumen"}</button></div>` : ""}
       <div class="row"><div>En ${mOnly(addM(M, 1))}<b>${money(next)}</b></div><div style="text-align:right">Cuotas que faltan pagar<b>${money(future)}</b></div></div>
       ${ppl.length ? `<div class="split"><div class="cl"><span>Tuyo</span><b>${money(own)}</b></div>${ppl.map(p => { const pd = isPaid(c.id, M, p.who); return `<div class="cl"><span>${esc(p.who)}</span><span><b>${money(p.total)}</b><button class="pbtn${pd ? " on" : ""}" data-act="togglePaid" data-id="${esc(c.id)}" data-who="${esc(p.who)}">${pd ? "✓ Pagó" : "¿Pagó?"}</button></span></div>`; }).join("")}</div>` : ""}
@@ -1227,16 +1234,221 @@ function cardForm(c) {
 }
 /* fechas reales de un resumen puntual (opcional): se guardan por mes de vencimiento */
 function cardDatesForm(cid) {
-  const c = card(cid); if (!c) return; const M = S.month, has = !!(c.cierres || {})[M];
+  const c = card(cid); if (!c) return; const M = S.month, has = !!((c.cierres || {})[M] || (c.cierreF || {})[M]);
   const days = sel => Array.from({length: 31}, (_, i) => `<option ${i + 1 === Number(sel) ? "selected" : ""}>${i + 1}</option>`).join("");
   openSheet(`<h2>Fechas del resumen de ${mOnly(M)}</h2><div class="note">${esc(c.name)}. Normalmente no hace falta: la app usa los días aproximados (~${c.cierre} y ~${c.venc}). Ajustalo solo si este mes el cierre cayó en otra fecha y alguna compra quedó en el resumen equivocado.</div><form id="f">
-    <div class="two"><label class="fld"><span>Cerró el día</span><select name="cierre">${days(cierreOf(c, M))}</select></label><label class="fld"><span>Vence el día</span><select name="venc">${days(vencOf(c, M))}</select></label></div>
+    <div class="two"><label class="fld"><span>Cerró el día</span><select name="cierre">${days(+closeDateOf(c, M).slice(8))}</select></label><label class="fld"><span>Vence el día</span><select name="venc">${days(+vencDateOf(c, M).slice(8))}</select></label></div>
     <button class="btn primary">Guardar</button>${has ? `<button type="button" class="btn ghost" id="resetBtn">Volver a los días aproximados</button>` : ""}</form>`);
   const f = $("#f");
-  const save = (ci, ve) => { const cs = {...(c.cierres || {})}, vs = {...(c.vencs || {})}; if (ci) { cs[M] = ci; vs[M] = ve; } else { delete cs[M]; delete vs[M]; }
-    S.cfg.cards = S.cfg.cards.map(x => x.id === c.id ? {...x, cierres: cs, vencs: vs} : x); persist("config"); closeSheet(); toast("Fechas guardadas"); render(); };
+  const save = (ci, ve) => { const cs = {...(c.cierres || {})}, vs = {...(c.vencs || {})}, cf = {...(c.cierreF || {})}, vf = {...(c.vencF || {})}; delete cf[M]; delete vf[M]; if (ci) { cs[M] = ci; vs[M] = ve; } else { delete cs[M]; delete vs[M]; }
+    S.cfg.cards = S.cfg.cards.map(x => x.id === c.id ? {...x, cierres: cs, vencs: vs, cierreF: cf, vencF: vf} : x); persist("config"); closeSheet(); toast("Fechas guardadas"); render(); };
   f.onsubmit = e => { e.preventDefault(); save(Number(val(f, "cierre")), Number(val(f, "venc"))); };
   const rb = $("#resetBtn"); if (rb) rb.onclick = () => save(0, 0);
+}
+/* ---------- resumen de la tarjeta (PDF) ----------
+   El PDF se lee en el mismo celular con pdf.js: no se sube a ningún lado. De ahí salen las fechas,
+   los saldos y los impuestos; se comparan con las cuotas registradas y se arma un PDF por persona (jsPDF). */
+const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+const JSPDF = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+const TOL_ARS = 15000, TOL_USD = 5;
+const fmtD = s => s ? s.slice(8, 10) + "/" + s.slice(5, 7) + "/" + s.slice(0, 4) : "—";
+const fmtDs = s => s ? s.slice(8, 10) + "/" + s.slice(5, 7) : "—";
+const addDays = (s, n) => { const d = new Date(s + "T12:00:00"); d.setDate(d.getDate() + n); return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); };
+const dDiff = (a, b) => Math.round((new Date(b + "T12:00:00") - new Date(a + "T12:00:00")) / 864e5);
+async function ensurePdfJs() { if (!window.pdfjsLib) await loadScript(PDFJS + "pdf.min.js"); window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + "pdf.worker.min.js"; }
+async function ensureJsPdf() { if (!window.jspdf) await loadScript(JSPDF); return window.jspdf.jsPDF; }
+/* texto del PDF armado en renglones (por posición vertical), para poder buscar "etiqueta + valor" */
+async function pdfLines(data, password) {
+  await ensurePdfJs();
+  const doc = await window.pdfjsLib.getDocument({data, password}).promise, lines = [];
+  for (let pg = 1; pg <= doc.numPages; pg++) {
+    const tc = await (await doc.getPage(pg)).getTextContent(), rows = [];
+    for (const it of tc.items) { if (!it.str || !it.str.trim()) continue; const y = it.transform[5];
+      let r = rows.find(q => Math.abs(q.y - y) < 2.5); if (!r) rows.push(r = {y, parts: []}); r.parts.push({x: it.transform[4], s: it.str}); }
+    rows.sort((a, b) => b.y - a.y).forEach(r => lines.push(r.parts.sort((a, b) => a.x - b.x).map(q => q.s).join(" ").replace(/\s+/g, " ").trim()));
+  }
+  return lines;
+}
+const MON = {ENE: 1, JAN: 1, FEB: 2, MAR: 3, ABR: 4, APR: 4, MAY: 5, JUN: 6, JUL: 7, AGO: 8, AUG: 8, SEP: 9, SET: 9, OCT: 10, NOV: 11, DIC: 12, DEC: 12};
+function mkDate(d, m, y) { d = +d; m = /^\d+$/.test(m) ? +m : MON[m.slice(0, 3)]; y = +y; if (y < 100) y += 2000;
+  if (!m || m > 12 || d < 1 || d > 31 || y < 2015 || y > 2100) return ""; const dt = new Date(y, m - 1, d); return dt.getMonth() === m - 1 ? y + "-" + pad(m) + "-" + pad(d) : ""; }
+function pdfNums(l) {
+  const out = [], re = /(\d{1,3}(?:\.\d{3})+,\d{2}|\d+,\d{2})(-)?/g; let m;
+  while ((m = re.exec(l))) { const pre = l.slice(Math.max(0, m.index - 9), m.index);
+    out.push({v: parseAmt(m[1]) * (m[2] || /-\s*(U\$S|USD|\$)?\s*$/.test(pre) ? -1 : 1), usd: /U\$S|USD|U\$D|US\$|DOLAR|U\$/.test(pre)}); }
+  return out;
+}
+function parseStmt(raw) {
+  const L = raw.map(l => l.normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase()), txt = L.join(" \n ");
+  const dates = [], DRE = /\b(\d{1,2})[\s\-\/.]+(\d{1,2}|[A-Z]{3})[A-Z]*\.?[\s\-\/.]+(\d{4}|\d{2})\b/g; let m;
+  while ((m = DRE.exec(txt))) { const d = mkDate(m[1], m[2], m[3]); if (d) dates.push({d, i: m.index}); }
+  /* 1) por etiqueta: "CIERRE ACTUAL 23 OCT 25", "PROX. VTO 01/12/25"… */
+  const r = {cierre: "", venc: "", proxCierre: "", proxVenc: ""};
+  const lab = (re, kA, kP) => { let q; while ((q = re.exec(txt))) { const end = q.index + q[0].length, k = /PROX/.test(txt.slice(Math.max(0, q.index - 12), end)) ? kP : kA;
+    if (r[k]) continue; const nd = dates.find(x => x.i >= end && x.i - end < 25); if (nd) r[k] = nd.d; } };
+  /* etiquetas en un renglón y fechas en el de abajo, en el mismo orden (formato de varios bancos) */
+  L.forEach((l, i) => { const keys = [], LRE = /PROX\w*\.?\s+CIERRE|PROX\w*\.?\s+(?:VENCIMIENTO|VENC\.?|VTO\.?)|CIERRE|VENCIMIENTO|VENC\.?\b|VTO\.?\b/g; let q;
+    while ((q = LRE.exec(l))) keys.push(/PROX/.test(q[0]) ? (/CIERRE/.test(q[0]) ? "proxCierre" : "proxVenc") : (/CIERRE/.test(q[0]) ? "cierre" : "venc"));
+    if (keys.length < 2 || !L[i + 1]) return; const ds = []; const DR2 = new RegExp(DRE.source, "g"); let z; while ((z = DR2.exec(L[i + 1]))) { const d = mkDate(z[1], z[2], z[3]); if (d) ds.push(d); }
+    if (ds.length === keys.length) keys.forEach((k, j) => { if (!r[k]) r[k] = ds[j]; }); });
+  lab(/CIERRE/g, "cierre", "proxCierre"); lab(/VENCIMIENTO|VENC\.?\b|VTO\.?\b/g, "venc", "proxVenc");
+  /* 2) si no cierra, se buscan 4 fechas que encajen: cierre → vencimiento (3 a 25 días) → próximo cierre (20 a 40) → próximo vencimiento */
+  const fits = q => q.cierre && q.venc && q.proxCierre && q.proxVenc && dDiff(q.cierre, q.venc) >= 3 && dDiff(q.cierre, q.venc) <= 25 && dDiff(q.cierre, q.proxCierre) >= 20 && dDiff(q.cierre, q.proxCierre) <= 40 && dDiff(q.proxCierre, q.proxVenc) >= 3 && dDiff(q.proxCierre, q.proxVenc) <= 25;
+  let out = r;
+  if (!fits(r)) {
+    const u = [...new Set(dates.map(x => x.d))].sort(); let best = null, bs = -1;
+    for (const c1 of u) for (const v1 of u) { const a = dDiff(c1, v1); if (a < 3 || a > 25) continue;
+      for (const c2 of u) { const b = dDiff(c1, c2); if (b < 20 || b > 40) continue;
+        for (const v2 of u) { const cc = dDiff(c2, v2); if (cc < 3 || cc > 25) continue;
+          const q = {cierre: c1, venc: v1, proxCierre: c2, proxVenc: v2}, sc = Object.keys(q).filter(k => r[k] === q[k]).length;
+          if (sc >= bs) { bs = sc; best = q; } } } }
+    if (best) out = best;
+  }
+  /* saldos: "SALDO ACTUAL $ 1.234,56 U$S 12,34" (o en el renglón de abajo) */
+  let ars = null, usd = null; const SAL = /SALDO ACTUAL|TOTAL A PAGAR|SALDO A PAGAR|SALDO TOTAL/;
+  for (let i = 0; i < L.length && (ars === null || usd === null); i++) {
+    const l = L[i], k = l.search(SAL); if (k < 0) continue;
+    let ns = pdfNums(l.slice(k)); if (!ns.length && L[i + 1]) ns = pdfNums(L[i + 1]); if (!ns.length) continue;
+    const flagged = ns.some(n => n.usd), dolLine = /DOLAR|U\$S|USD/.test(l.slice(0, k + 30));
+    ns.forEach((n, j) => { const isU = n.usd || (!flagged && (ns.length === 1 ? dolLine : j === 1)); if (isU) { if (usd === null) usd = n.v; } else if (ars === null) ars = n.v; });
+  }
+  /* impuestos y cargos que el banco suma solo (percepciones, IVA, sellos, intereses, comisiones) */
+  const KW = /PERCEP|IMPUESTO|\bIMP\b|\bIMP\.|\bIVA\b|SELLOS|INTERES|COMISION|\bCARGO|IIBB|INGRESOS BRUTOS|\bDB\.?\s?RG|\bRG\s?\d{3,4}|BONIF/;
+  const NO = /SALDO|TOTAL|MINIMO|LIMITE|\bTNA\b|\bTEM\b|\bCFT|TASA|SU PAGO|PAGO EN|DISPONIBLE/;
+  const cargos = [];
+  L.forEach((l, i) => { if (!KW.test(l) || NO.test(l)) return; const ns = pdfNums(l); if (!ns.length) return; const n = ns[ns.length - 1]; if (!n.v) return;
+    cargos.push({t: raw[i].slice(0, 70), v: n.v, usd: n.usd || /U\$S|USD/.test(l)}); });
+  return {...out, ars, usd, cargos, lines: raw};
+}
+function stmtForm(cid) {
+  const c = card(cid); if (!c) return;
+  openSheet(`<h2>Calcular importes del mes</h2><div class="note">${esc(c.name)}. Elegí el PDF del resumen que te mandó el banco: saco de ahí las fechas, el saldo en pesos y en dólares, y lo comparo con lo que registraste. El PDF se lee acá, en tu celular: no se sube a ningún lado.</div>
+    <label class="btn primary" style="display:block;text-align:center;margin-top:14px"><input type="file" id="pdfIn" accept="application/pdf,.pdf" hidden>Elegir el PDF del resumen</label>
+    <div id="pwdBox" class="hidden"><label class="fld"><span>El PDF tiene contraseña (suele ser tu DNI)</span><input type="password" id="pwdIn" autocomplete="off"></label><button class="btn primary" id="pwdGo" type="button">Abrir</button></div>
+    <div class="hint" id="pdfMsg"></div>
+    <button class="btn ghost" type="button" id="manBtn">No tengo el PDF: cargar los datos a mano</button>`);
+  let buf = null;
+  const go = async pwd => { const msg = $("#pdfMsg"); msg.textContent = "Leyendo el resumen…";
+    try { const lines = await pdfLines(buf.slice(0), pwd);
+      if (!lines.length) { stmtReview(cid, {note: "No encontré texto en el PDF (¿es una foto o un escaneo?). Completá los datos mirando el resumen."}); return; }
+      stmtReview(cid, parseStmt(lines));
+    } catch (e) {
+      if (e && e.name === "PasswordException") { $("#pwdBox").classList.remove("hidden"); msg.textContent = pwd ? "La contraseña no es correcta." : ""; setTimeout(() => $("#pwdIn").focus(), 100); }
+      else msg.textContent = navigator.onLine ? "No pude leer ese PDF. ¿Es el resumen que bajaste del banco?" : "Para leer el PDF la primera vez necesitás internet.";
+    } };
+  $("#pdfIn").onchange = async e => { const file = e.target.files[0]; if (!file) return; buf = new Uint8Array(await file.arrayBuffer()); go(); };
+  $("#pwdGo").onclick = () => go($("#pwdIn").value);
+  $("#manBtn").onclick = () => stmtReview(cid, {});
+}
+function stmtReview(cid, p) {
+  const c = card(cid); if (!c) return;
+  const M0 = p.venc ? ymOf(p.venc) : S.month, nM0 = addM(M0, 1);
+  const d = {cierre: p.cierre || closeDateOf(c, M0), venc: p.venc || vencDateOf(c, M0), proxCierre: p.proxCierre || closeDateOf(c, nM0), proxVenc: p.proxVenc || vencDateOf(c, nM0)};
+  const cg = p.cargos || [], got = ["cierre", "venc", "proxCierre", "proxVenc"].filter(k => p[k]).length;
+  const sumC = (usd, f) => Math.round(cg.reduce((t, x, i) => t + (x.usd === usd && (!f || f.elements["cg" + i].checked) ? x.v : 0), 0) * 100) / 100;
+  const cA = p.cArs != null ? p.cArs : sumC(false), cU = p.cUsd != null ? p.cUsd : sumC(true);
+  const amt = v => v != null && v !== "" ? numIn(v) : "";
+  const note = p.note || (p.lines ? (got === 4 && p.ars != null ? "Esto es lo que encontré en el PDF. Fijate que esté bien y corregí lo que haga falta." : "No pude leer todo del PDF: completá lo que falta mirando el resumen.") : "Completá los datos mirando el resumen.");
+  openSheet(`<h2>Revisá los datos del resumen</h2><div class="note">${esc(note)}</div><form id="f" autocomplete="off">
+    <div class="two"><label class="fld"><span>Cierre</span><input type="date" name="cierre" value="${d.cierre}"></label><label class="fld"><span>Vencimiento</span><input type="date" name="venc" value="${d.venc}" required></label></div>
+    <div class="two"><label class="fld"><span>Próximo cierre</span><input type="date" name="proxCierre" value="${d.proxCierre}"></label><label class="fld"><span>Próximo vencimiento</span><input type="date" name="proxVenc" value="${d.proxVenc}"></label></div>
+    <div class="two"><label class="fld"><span>Saldo a pagar en pesos</span><input name="ars" inputmode="decimal" value="${amt(p.ars)}" placeholder="0"></label><label class="fld"><span>Saldo a pagar en dólares</span><input name="usd" inputmode="decimal" value="${amt(p.usd)}" placeholder="0"></label></div>
+    ${cg.length ? `<div class="lab">Impuestos y cargos que encontré</div>` + cg.map((x, i) => `<label class="chk"><input type="checkbox" name="cg${i}" checked> <span>${esc(x.t)} · <b>${money(x.v, x.usd ? "USD" : "ARS")}</b></span></label>`).join("") : ""}
+    <div class="two"><label class="fld"><span>Impuestos y cargos en pesos</span><input name="cArs" inputmode="decimal" value="${amt(cA || "")}" placeholder="0"></label><label class="fld"><span>Impuestos y cargos en dólares</span><input name="cUsd" inputmode="decimal" value="${amt(cU || "")}" placeholder="0"></label></div>
+    <div class="note">Es lo que el banco suma y no cargaste como compra (percepciones, IVA, sellos, intereses, comisiones). Se suma a lo registrado para comparar.</div>
+    <label class="fld"><span>¿Quién paga los impuestos y cargos?</span><select name="cWho"><option value="yo">Yo</option><option value="prop" ${p.cWho === "prop" ? "selected" : ""}>Repartirlos según lo que gastó cada uno</option></select></label>
+    ${p.lines ? `<details style="margin-top:10px"><summary class="note" style="cursor:pointer">Ver el texto que leí del PDF</summary><pre style="white-space:pre-wrap;font-size:11px;color:var(--mute);max-height:240px;overflow:auto">${esc(p.lines.join("\n").slice(0, 8000))}</pre></details>` : ""}
+    <button class="btn primary">Comparar con lo registrado</button></form>`, () => stmtForm(cid));
+  const f = $("#f");
+  f.addEventListener("change", e => { if (/^cg\d+$/.test(e.target.name)) { f.elements.cArs.value = amt(sumC(false, f) || ""); f.elements.cUsd.value = amt(sumC(true, f) || ""); } });
+  f.onsubmit = e => { e.preventDefault();
+    const ok = k => /^\d{4}-\d{2}-\d{2}$/.test(val(f, k)) ? val(f, k) : "";
+    const venc = ok("venc"), cierre = ok("cierre"), pc = ok("proxCierre"), pv = ok("proxVenc");
+    if (!venc) { toast("Poné la fecha de vencimiento"); return; }
+    if (cierre && cierre >= venc) { toast("El cierre tiene que ser antes del vencimiento"); return; }
+    const n = k => parseAmt(val(f, k)) || 0, M = ymOf(venc), nM = pv ? ymOf(pv) : "";
+    const cc = card(cid), cf = {...(cc.cierreF || {})}, vf = {...(cc.vencF || {})};
+    vf[M] = venc; if (cierre) cf[M] = cierre;
+    if (nM > M && pc && pv) { cf[nM] = pc; vf[nM] = pv; }
+    S.cfg.cards = S.cfg.cards.map(x => x.id === cid ? {...x, cierreF: cf, vencF: vf} : x);
+    S.cfg.stmts = {...(S.cfg.stmts || {}), [cid + "|" + M]: {ars: n("ars"), usd: n("usd"), cArs: n("cArs"), cUsd: n("cUsd"), cWho: val(f, "cWho"), at: Date.now()}};
+    persist("config"); S.month = M; render(); stmtResult(cid, M); };
+}
+/* compara lo registrado del resumen con lo del banco y arma el reparto por persona */
+function stmtCalc(cid, M) {
+  const c = card(cid), st = (S.cfg.stmts || {})[cid + "|" + M]; if (!c || !st) return null;
+  const list = cardSchedule(M).filter(s => s.cardId === cid);
+  const regArs = list.filter(s => !s.usd).reduce((t, s) => t + s.amt, 0), regUsd = list.reduce((t, s) => t + s.usd, 0);
+  const dA = st.ars - (regArs + st.cArs), dU = st.usd - (regUsd + st.cUsd);
+  const map = {"": {who: "", items: [], ars: 0, usd: 0}};
+  for (const s of list) { const p = map[s.who] || (map[s.who] = {who: s.who, items: [], ars: 0, usd: 0}); p.items.push(s); if (s.usd) p.usd += s.usd; else p.ars += s.amt; }
+  const ppl = Object.values(map).sort((a, b) => !a.who ? -1 : !b.who ? 1 : a.who.localeCompare(b.who));
+  ppl.forEach(p => { p.cArs = 0; p.cUsd = 0; });
+  if (st.cWho === "prop") { const rate = cardRate(cid, M) || 0, w = p => p.ars + p.usd * rate, tot = ppl.reduce((t, p) => t + w(p), 0);
+    ppl.forEach(p => { const sh = tot > 0 ? w(p) / tot : (p.who ? 0 : 1); p.cArs = st.cArs * sh; p.cUsd = st.cUsd * sh; }); }
+  else { ppl[0].cArs = st.cArs; ppl[0].cUsd = st.cUsd; }
+  ppl.forEach(p => { p.totArs = p.ars + p.cArs; p.totUsd = p.usd + p.cUsd; });
+  return {c, st, M, regArs, regUsd, dA, dU, ok: Math.abs(dA) <= TOL_ARS && Math.abs(dU) <= TOL_USD, ppl: ppl.filter(p => p.items.length || Math.abs(p.cArs) > 0.004 || Math.abs(p.cUsd) > 0.004)};
+}
+function stmtResult(cid, M, force) {
+  const r = stmtCalc(cid, M); if (!r) return; const {c, st} = r, nM = addM(M, 1);
+  const df = (d, cur) => Math.abs(d) < 0.005 ? "iguales" : d > 0 ? "el resumen tiene " + money(d, cur) + " más" : "el resumen tiene " + money(-d, cur) + " menos";
+  let h = `<h2>${esc(c.name)} · ${mName(M)}</h2><div class="note">Cierre ${fmtD(closeDateOf(c, M))} · vence ${fmtD(vencDateOf(c, M))}</div>
+    <div class="tiles" style="margin-top:10px"><div class="tile"><span>Pesos · resumen</span><b>${money(st.ars)}</b></div><div class="tile"><span>Pesos · registrado${st.cArs ? " + cargos" : ""}</span><b>${money(r.regArs + st.cArs)}</b></div>
+    <div class="tile"><span>Dólares · resumen</span><b>${money(st.usd, "USD")}</b></div><div class="tile"><span>Dólares · registrado${st.cUsd ? " + cargos" : ""}</span><b>${money(r.regUsd + st.cUsd, "USD")}</b></div></div>`;
+  if (!r.ok) h += `<div class="alert" style="margin-top:10px">⚠️ Los importes no coinciden. Pesos: ${df(r.dA)}. Dólares: ${df(r.dU, "USD")}.</div>
+    <div class="note">Puede faltar cargar alguna compra o cuota, haber una compra en el resumen equivocado o impuestos y cargos sin sumar. Cargá lo que falte y volvé a tocar el botón de la tarjeta.</div>
+    <button class="btn primary" data-x="review">Revisar los datos del resumen</button>${force ? "" : `<button class="btn ghost" data-x="force">Ver el reparto igual</button>`}`;
+  else h += `<div class="alert info" style="margin-top:10px">✅ Los importes coinciden${Math.abs(r.dA) > 0.5 || Math.abs(r.dU) > 0.005 ? " (diferencia de " + money(Math.abs(r.dA)) + " y " + money(Math.abs(r.dU), "USD") + ")" : ""}.</div>`;
+  if (r.ok || force) {
+    h += `<div class="lab">Cuánto paga cada uno</div>` + r.ppl.map((p, i) => `<div class="owe"><div class="ico">${p.who ? "👤" : "🙋"}</div><div class="mid"><b>${esc(p.who || "Yo")}</b><small>${p.items.length} gasto${p.items.length === 1 ? "" : "s"}${p.cArs || p.cUsd ? " + cargos" : ""}</small></div><div style="text-align:right"><b>${money(p.totArs)}</b><small style="display:block;color:var(--mute);font-size:12px">${money(p.totUsd, "USD")}</small></div><button class="mini" data-x="pdf" data-i="${i}">PDF</button></div>`).join("") +
+      `<button class="btn primary" data-x="all">PDF con todos</button>`;
+  }
+  if ((c.cierreF || {})[nM]) h += `<div class="note" style="margin-top:10px">Próximo resumen: cierra el ${fmtD(closeDateOf(c, nM))} y vence el ${fmtD(vencDateOf(c, nM))}. Ya quedó guardado en la tarjeta para ubicar bien las compras nuevas.</div>`;
+  h += `<button class="btn ghost" data-x="other">Cargar otro PDF</button>`;
+  openSheet(h);
+  if (r.ok || force) ensureJsPdf().catch(() => {});
+  $("#sheetIn").onclick = e => { const b = e.target.closest("[data-x]"); if (!b) return; const x = b.dataset.x;
+    if (x === "force") stmtResult(cid, M, true);
+    else if (x === "other") stmtForm(cid);
+    else if (x === "review") stmtReview(cid, {cierre: (c.cierreF || {})[M], venc: vencDateOf(c, M), proxCierre: (c.cierreF || {})[nM], proxVenc: (c.vencF || {})[nM], ars: st.ars, usd: st.usd, cArs: st.cArs, cUsd: st.cUsd, cWho: st.cWho});
+    else if (x === "pdf") stmtPdf(cid, M, Number(b.dataset.i));
+    else if (x === "all") stmtPdf(cid, M, null); };
+}
+async function stmtPdf(cid, M, which) {
+  const r = stmtCalc(cid, M); if (!r) return;
+  let J; try { J = await ensureJsPdf(); } catch (e) { toast("No pude armar el PDF: revisá la conexión"); return; }
+  const c = r.c, ppl = which == null ? r.ppl : [r.ppl[which]], pm = (n, cur) => money(n, cur).replace("−", "-");
+  const per = "Período del " + fmtD(addDays(closeDateOf(c, addM(M, -1)), 1)) + " al " + fmtD(closeDateOf(c, M)) + " · Vence el " + fmtD(vencDateOf(c, M));
+  const doc = new J({unit: "mm", format: "a4"});
+  ppl.forEach((p, pi) => {
+    if (pi) doc.addPage();
+    let y = 20;
+    doc.setTextColor(20); doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.text(c.name, 14, y); y += 7;
+    doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.setTextColor(100); doc.text("Resumen de " + mName(M), 14, y); y += 5; doc.text(per, 14, y); y += 11;
+    doc.setTextColor(20); doc.setFont("helvetica", "bold"); doc.setFontSize(14); doc.text(p.who || "Yo", 14, y); y += 8;
+    const head = () => { doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setFillColor(238, 238, 238); doc.rect(14, y - 4.5, 182, 7, "F");
+      doc.text("Fecha", 16, y); doc.text("Detalle", 36, y); doc.text("Cuota", 130, y); doc.text("Pesos", 166, y, {align: "right"}); doc.text("Dólares", 194, y, {align: "right"}); y += 7; doc.setFont("helvetica", "normal"); };
+    const line = (fe, de, cu, a, u) => { if (y > 272) { doc.addPage(); y = 20; head(); }
+      doc.text(fe, 16, y); doc.text(doc.splitTextToSize(de, 90)[0] || "", 36, y); doc.text(cu, 130, y); doc.text(a, 166, y, {align: "right"}); doc.text(u, 194, y, {align: "right"});
+      doc.setDrawColor(225, 225, 225); doc.line(14, y + 2, 196, y + 2); y += 6.5; };
+    head();
+    p.items.slice().sort((a, b) => a.mov.date < b.mov.date ? -1 : a.mov.date > b.mov.date ? 1 : 0).forEach(s =>
+      line(fmtD(s.mov.date), s.mov.note || cat(s.mov.cat).n, s.n > 1 ? s.k + " de " + s.n : "-", s.usd ? "" : pm(s.amt), s.usd ? pm(s.usd, "USD") : ""));
+    if (Math.abs(p.cArs) > 0.004 || Math.abs(p.cUsd) > 0.004) line("", "Impuestos y cargos del resumen", "", p.cArs ? pm(p.cArs) : "", p.cUsd ? pm(p.cUsd, "USD") : "");
+    if (!p.items.length && !p.cArs && !p.cUsd) line("", "Sin gastos este mes", "", "", "");
+    y += 5; if (y > 262) { doc.addPage(); y = 20; }
+    doc.setFillColor(245, 240, 255); doc.rect(14, y - 5, 182, 17, "F");
+    doc.setFont("helvetica", "bold"); doc.setFontSize(11);
+    doc.text("Total a pagar en pesos", 17, y + 1); doc.text(pm(p.totArs), 193, y + 1, {align: "right"});
+    doc.text("Total a pagar en dólares", 17, y + 8); doc.text(pm(p.totUsd, "USD"), 193, y + 8, {align: "right"});
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(140); doc.text("Generado con Camoney el " + fmtD(todayStr()), 14, 289);
+  });
+  const name = (c.name + " " + mName(M) + (which == null ? "" : " " + (ppl[0].who || "Yo"))).replace(/[\\/:*?"<>|]/g, "").trim().replace(/\s+/g, "_") + ".pdf";
+  const file = new File([doc.output("blob")], name, {type: "application/pdf"});
+  try { if (navigator.canShare && navigator.canShare({files: [file]})) { await navigator.share({files: [file], title: name}); return; } }
+  catch (e) { if (e && e.name === "AbortError") return; }
+  doc.save(name);
 }
 function accForm(a) {
   const isNew = !a; a = a || {name: "", cur: "ARS", type: "mp", initial: 0};
@@ -1510,6 +1722,7 @@ document.addEventListener("click", e => {
     case "togglePaid": { const k = paidKey(id, S.month, el.dataset.who), p = {...(S.cfg.paid || {})}; if (p[k]) delete p[k]; else p[k] = true; S.cfg.paid = p; persist("config"); render(); break; }
     case "cardUsd": cardUsdForm(id); break;
     case "cardDates": cardDatesForm(id); break;
+    case "stmt": if ((S.cfg.stmts || {})[id + "|" + S.month]) stmtResult(id, S.month); else stmtForm(id); break;
     case "weekly": weeklyForm(); break;
     case "people": peopleForm(); break;
     case "delPerson": { const ppl = (S.cfg.people || []).slice(); ppl.splice(Number(id), 1); S.cfg.people = ppl; persist("config"); peopleForm(); render(); break; }
