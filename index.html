@@ -194,6 +194,18 @@ nav.tabs button.on{color:var(--acc)}
 body.auth nav.tabs,body.auth #fab,body.auth .mswitch{display:none!important}
 .loading{text-align:center;color:var(--mute);padding:60px 0}
 .qbar{display:flex;justify-content:flex-end;margin:-4px 0 10px}
+.ibar{display:flex;gap:8px;margin:0 0 12px}.ibar button{flex:1;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:14px;padding:12px 8px;font-size:14px;font-weight:700}
+.calhead{display:flex;align-items:center;justify-content:space-between;margin:6px 0 10px}.calhead b{font-size:18px}.calhead button{border:1px solid var(--line);background:var(--card);color:var(--ink);width:38px;height:38px;border-radius:50%;font-size:18px}
+.calgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.calm{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:14px;padding:10px 8px;text-align:left;min-height:74px}
+.calm b{display:block;font-size:14px;text-transform:capitalize;margin-bottom:4px}.calm small{display:block;font-size:11px;line-height:1.35}
+.calm.on{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}.calm.empty{opacity:.45}.calm.today b::after{content:" •";color:var(--acc)}
+.donut{display:flex;flex-direction:column;align-items:center}
+.donut svg{width:190px;height:190px}.donut circle.seg{cursor:pointer;transition:stroke-width .15s}
+.legrow{display:flex;align-items:center;gap:10px;padding:9px 2px;border-top:1px solid var(--line);width:100%;background:none;border-left:0;border-right:0;border-bottom:0;color:var(--ink);text-align:left;font-size:14px}
+.legrow:first-of-type{border-top:0}.legrow .sw{width:12px;height:12px;border-radius:4px;flex:none}.legrow .nm{flex:1;min-width:0}.legrow .nm small{display:block;color:var(--mute);font-size:12px}
+.legrow .bar{height:4px;border-radius:4px;background:var(--line);margin-top:5px;overflow:hidden}.legrow .bar i{display:block;height:100%;border-radius:4px}
+.legrow b{font-variant-numeric:tabular-nums}.legrow.sel{background:var(--acc-soft);border-radius:10px}
 .qbtn{border:1px solid #FF9F43;background:#3A2410;color:#FFB066;border-radius:99px;padding:10px 17px;font-size:15px;font-weight:700}
 .qrow{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line)}
 .qrow:first-of-type{border-top:0}
@@ -655,11 +667,11 @@ let fxStarted = false;
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && S.ready) fetchFx(); });
 function render() {
   $("#mLabel").textContent = mName(S.month);
-  document.querySelectorAll("nav.tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === (S.tab === "hist" || S.tab === "deudas" ? "mas" : S.tab)));
+  document.querySelectorAll("nav.tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === (S.tab === "hist" || S.tab === "deudas" ? "mas" : S.tab === "analisis" ? "inicio" : S.tab)));
   if (!S.ready) return;
   if (!fxStarted) { fxStarted = true; setTimeout(() => fetchFx(), 0); }
   navTrap();
-  const v = {inicio: vInicio, movs: vMovs, cards: vCards, sav: vSav, mas: vMas, hist: vHist, deudas: vDeudas}[S.tab]();
+  const v = {inicio: vInicio, movs: vMovs, cards: vCards, sav: vSav, mas: vMas, hist: vHist, deudas: vDeudas, analisis: vAnalisis}[S.tab]();
   $("#view").innerHTML = v;
   const q = $("#q"); if (q) { q.oninput = () => { S.filter.q = q.value; const pos = q.selectionStart; render(); const n = $("#q"); n.focus(); n.setSelectionRange(pos, pos); }; }
 }
@@ -692,6 +704,7 @@ function vInicio() {
   if (unpaid.length && M <= ymOf(todayStr())) alerts.push(`<div class="alert info">💳 Falta registrar el pago de ${esc(unpaid.join(" y "))}<button data-tab="cards">Ver</button></div>`);
   return `
   <div class="qbar"><button class="qbtn" data-act="quick">⚡ Registro rápido de gasto</button></div>
+  <div class="ibar"><button data-act="calendar">📅 Ver otros meses</button><button data-act="tab" data-v="analisis">📊 Análisis</button></div>
   ${quickCard()}
   <div class="card hero">
     <div class="lbl">Disponible en ${mOnly(M)}</div>
@@ -784,6 +797,51 @@ function mineBox(c, M) {
   if (Math.abs(now.tot) < 0.5 && next.every(x => Math.abs(x.tot) < 0.5)) return "";
   return `<div class="split" style="margin-top:10px"><div class="cl" style="align-items:flex-start"><span><b>Lo tuyo en ${mOnly(M)}</b>${Math.abs(now.usd) > 0.004 ? `<small style="display:block;opacity:.85">${money(now.ars)} + ${money(now.usd, "USD")}</small>` : ""}</span><span style="text-align:right"><b style="font-size:17px">${money(now.tot)}</b>${paid > 0.5 ? `<small style="display:block;opacity:.85">${left > 0.5 ? "pagaste " + money(paid) + " · falta " + money(left) : "✓ pagado"}</small>` : ""}</span></div>
     <div style="display:flex;justify-content:space-between;gap:4px;margin-top:6px;font-size:11px;opacity:.9">${next.map(x => `<div style="text-align:center;flex:1"><div style="opacity:.75">${mShort(x.ym)}</div><b style="font-size:12px">${k(x.tot)}</b></div>`).join("")}</div></div>`;
+}
+/* ---------- calendario de meses ----------
+   Una grilla por año: cada mes muestra lo que entró y salió; tocándolo vas a sus movimientos. */
+function calendarForm(year) {
+  year = year || Number(S.month.slice(0, 4)); const today = ymOf(todayStr());
+  const cells = Array.from({length: 12}, (_, i) => { const ym = year + "-" + pad(i + 1), st = stats(ym), has = (S.months[ym] || []).some(x => !String(x.method).startsWith("card:") && !x.cardPay);
+    return `<button class="calm${ym === S.month ? " on" : ""}${has ? "" : " empty"}${ym === today ? " today" : ""}" data-act="calPick" data-id="${ym}"><b>${MESES[i]}</b>${has ? `<small style="color:var(--in)">+${money(st.ing)}</small><small style="color:var(--out)">−${money(st.gastos)}</small>` : `<small style="color:var(--mute)">Sin movimientos</small>`}</button>`; }).join("");
+  openSheet(`<h2>Elegí un mes</h2><div class="calhead"><button data-act="calYear" data-id="${year - 1}" aria-label="Año anterior">‹</button><b>${year}</b><button data-act="calYear" data-id="${year + 1}" aria-label="Año siguiente">›</button></div>
+    <div class="calgrid">${cells}</div><div class="note" style="margin-top:10px">Tocá un mes para ver sus movimientos. En verde lo que entró y en rojo lo que salió.</div>`);
+}
+
+/* ---------- análisis: tortas de gastos e ingresos por categoría ----------
+   Paleta categórica validada para el fondo oscuro (orden fijo, nunca se repite: lo que pasa de 7 va a "Otras"). */
+const ANA_COLORS = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#0ca30c", "#9085e9"], ANA_OTHER = "#6b6b6b";
+function anaData(ym, type) {
+  const by = {};
+  for (const it of S.months[ym] || []) { if (it.type !== type || String(it.method).startsWith("card:") || it.cardPay) continue; by[it.cat] = (by[it.cat] || 0) + it.amount; }
+  const arr = Object.entries(by).filter(([, v]) => v > 0.004).sort((a, b) => b[1] - a[1]).map(([id, v], i) => ({id, v, n: cat(id).n, i: cat(id).i, c: ANA_COLORS[i]}));
+  if (arr.length > ANA_COLORS.length) { const rest = arr.splice(ANA_COLORS.length - 1); arr.push({id: "__otras", v: rest.reduce((t, x) => t + x.v, 0), n: "Otras (" + rest.length + ")", i: "•", c: ANA_OTHER, list: rest}); }
+  return arr;
+}
+function donutSvg(arr, total, sel) {
+  const R = 70, C = 2 * Math.PI * R, gap = arr.length > 1 ? 2 : 0; let off = 0;
+  const segs = arr.map(x => { const len = x.v / total * C, d = Math.max(0.5, len - gap), h = `<circle class="seg" data-act="anaSel" data-id="${esc(x.id)}" cx="95" cy="95" r="${R}" fill="none" stroke="${x.c}" stroke-width="${sel === x.id ? 30 : 24}" stroke-dasharray="${d} ${C - d}" stroke-dashoffset="${-off}" transform="rotate(-90 95 95)" opacity="${sel && sel !== x.id ? 0.35 : 1}"><title>${esc(x.n)}: ${money(x.v)}</title></circle>`; off += len; return h; }).join("");
+  const s = sel && arr.find(x => x.id === sel);
+  return `<svg viewBox="0 0 190 190" role="img" aria-label="Gráfico de torta">${segs}
+    <text x="95" y="${s ? 86 : 90}" text-anchor="middle" fill="var(--mute)" font-size="11" font-weight="600">${s ? esc(s.n.length > 20 ? s.n.slice(0, 19) + "…" : s.n) : "Total"}</text>
+    <text x="95" y="${s ? 106 : 110}" text-anchor="middle" fill="var(--ink)" font-size="17" font-weight="800">${money(s ? s.v : total)}</text>
+    ${s ? `<text x="95" y="124" text-anchor="middle" fill="var(--mute)" font-size="11">${(s.v / total * 100).toFixed(1).replace(".", ",")}%</text>` : ""}</svg>`;
+}
+function vAnalisis() {
+  const M = S.month, type = S.ana === "ingreso" ? "ingreso" : "gasto", arr = anaData(M, type), total = arr.reduce((t, x) => t + x.v, 0), sel = S.anaSel;
+  const st = stats(M), pv = anaData(addM(M, -1), type), pvMap = {}; pv.forEach(x => { (x.list || [x]).forEach(y => { pvMap[y.id] = y.v; }); });
+  const seg = `<div class="seg" style="margin-bottom:12px"><label><input type="radio" name="anaT" ${type === "gasto" ? "checked" : ""} data-act="anaSeg" data-id="gasto"><span data-act="anaSeg" data-id="gasto">Gastos</span></label><label><input type="radio" name="anaT" ${type === "ingreso" ? "checked" : ""} data-act="anaSeg" data-id="ingreso"><span data-act="anaSeg" data-id="ingreso">Ingresos</span></label></div>`;
+  let html = `<button class="back" data-act="tab" data-v="inicio">‹ Volver</button><div class="card"><h3>Análisis de ${mName(M)}</h3>
+    <div class="tiles"><div class="tile"><span>Ingresos</span><b style="color:var(--in)">${money(st.ing)}</b></div><div class="tile"><span>Gastos</span><b style="color:var(--out)">${money(st.gastos)}</b></div></div>
+    <div class="note" style="margin-top:8px">${st.ing - st.gastos >= 0 ? "Te quedó " + money(st.ing - st.gastos) + " después de los gastos" : "Gastaste " + money(st.gastos - st.ing) + " más de lo que entró"}. Las compras con tarjeta no entran: cuenta lo que anotás en Gastos (por ejemplo, el pago de la tarjeta).</div></div>${seg}`;
+  if (!arr.length) return html + `<div class="empty">No hay ${type === "gasto" ? "gastos" : "ingresos"} en ${mName(M)}. Cambiá de mes con las flechas de arriba.</div>`;
+  html += `<div class="card"><div class="donut">${donutSvg(arr, total, sel)}</div>
+    <div class="note" style="text-align:center;margin:4px 0 10px">Tocá una porción o una categoría para ver el detalle.</div>
+    ${arr.map(x => { const pvv = x.list ? x.list.reduce((t, y) => t + (pvMap[y.id] || 0), 0) : pvMap[x.id] || 0, dif = pvv ? (x.v - pvv) / pvv * 100 : null;
+      return `<button class="legrow${sel === x.id ? " sel" : ""}" data-act="anaSel" data-id="${esc(x.id)}"><span class="sw" style="background:${x.c}"></span><span class="nm">${esc(x.i)} ${esc(x.n)}<small>${(x.v / total * 100).toFixed(1).replace(".", ",")}% del total${dif !== null ? " · " + (dif >= 0 ? "▲ " : "▼ ") + Math.abs(dif).toFixed(0) + "% vs " + mOnly(addM(M, -1)) : ""}</small><span class="bar"><i style="width:${(x.v / arr[0].v * 100).toFixed(1)}%;background:${x.c}"></i></span></span><b>${money(x.v)}</b></button>` +
+        (x.list && sel === x.id ? x.list.map(y => `<div class="legrow" style="padding-left:24px;font-size:13px"><span class="nm">${esc(y.i)} ${esc(y.n)}</span><b>${money(y.v)}</b></div>`).join("") : ""); }).join("")}
+    <div class="legrow" style="font-weight:800"><span class="nm">Total</span><b>${money(total)}</b></div></div>`;
+  return html;
 }
 function vCards() {
   const M = S.month;
@@ -1870,6 +1928,11 @@ document.addEventListener("click", e => {
     case "cardUsd": cardUsdForm(id); break;
     case "cardDates": cardDatesForm(id); break;
     case "cardBuy": cardBuy(id); break;
+    case "calendar": calendarForm(); break;
+    case "calPick": S.month = id; S.tab = "movs"; closeSheet(); window.scrollTo(0, 0); render(); break;
+    case "calYear": calendarForm(Number(id)); break;
+    case "anaSeg": S.anaSel = null; S.ana = id; render(); break;
+    case "anaSel": S.anaSel = S.anaSel === id ? null : id; render(); break;
     case "budgetsCopy": { const pb = prevBudget(S.month); budgetsForm(pb || undefined); if (pb) toast("Copié los montos de " + mOnly(addM(S.month, -1)) + ": cambiá los que quieras y guardá"); break; }
     case "cardPay": cardPayForm(id, S.month); break;
     case "reint": reintForm(id, el.dataset.rid); break;
@@ -1883,7 +1946,7 @@ document.addEventListener("click", e => {
 $("#fab").onclick = () => S.tab === "cards" ? cardBuy() : movForm();
 $("#sheetBg").onclick = sheetBack;
 $("#prevM").onclick = () => { S.month = addM(S.month, -1); render(); };
-$("#mLabel").onclick = () => { S.tab = "hist"; window.scrollTo(0, 0); render(); };
+$("#mLabel").onclick = () => calendarForm();
 $("#nextM").onclick = () => { S.month = addM(S.month, 1); render(); };
 document.addEventListener("keydown", e => { if (e.key === "Escape" && sheetOpen()) sheetBack(); });
 $("#sheetBack").onclick = sheetBack;
