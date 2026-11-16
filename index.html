@@ -1420,6 +1420,8 @@ async function stmtPdf(cid, M, which) {
   let J; try { J = await ensureJsPdf(); } catch (e) { toast("No pude armar el PDF: revisá la conexión"); return; }
   const c = r.c, ppl = which == null ? r.ppl : [r.ppl[which]], pm = (n, cur) => money(n, cur).replace("−", "-");
   const per = "Período del " + fmtD(addDays(closeDateOf(c, addM(M, -1)), 1)) + " al " + fmtD(closeDateOf(c, M)) + " · Vence el " + fmtD(vencDateOf(c, M));
+  const rate = cardRate(cid, M), own = (S.cfg.cardUsd || {})[cid + "|" + M];
+  const rateLbl = pm(rate) + (own ? ", dólar del resumen" : ", " + fxName(S.cfg.cardFx || S.cfg.usdSrc).toLowerCase());
   const doc = new J({unit: "mm", format: "a4"});
   ppl.forEach((p, pi) => {
     if (pi) doc.addPage();
@@ -1437,11 +1439,20 @@ async function stmtPdf(cid, M, which) {
       line(fmtD(s.mov.date), s.mov.note || cat(s.mov.cat).n, s.n > 1 ? s.k + " de " + s.n : "-", s.usd ? "" : pm(s.amt), s.usd ? pm(s.usd, "USD") : ""));
     if (Math.abs(p.cArs) > 0.004 || Math.abs(p.cUsd) > 0.004) line("", "Impuestos y cargos del resumen", "", p.cArs ? pm(p.cArs) : "", p.cUsd ? pm(p.cUsd, "USD") : "");
     if (!p.items.length && !p.cArs && !p.cUsd) line("", "Sin gastos este mes", "", "", "");
-    y += 5; if (y > 262) { doc.addPage(); y = 20; }
-    doc.setFillColor(245, 240, 255); doc.rect(14, y - 5, 182, 17, "F");
+    /* totales: pesos, dólares, los dólares pasados a pesos y el total todo en pesos */
+    const showFx = rate > 0 && Math.abs(p.totUsd) > 0.004, boxH = showFx ? 33 : 17;
+    y += 5; if (y > 285 - boxH - 8) { doc.addPage(); y = 20; }
+    doc.setFillColor(245, 240, 255); doc.rect(14, y - 5, 182, boxH, "F");
     doc.setFont("helvetica", "bold"); doc.setFontSize(11);
     doc.text("Total a pagar en pesos", 17, y + 1); doc.text(pm(p.totArs), 193, y + 1, {align: "right"});
     doc.text("Total a pagar en dólares", 17, y + 8); doc.text(pm(p.totUsd, "USD"), 193, y + 8, {align: "right"});
+    if (showFx) {
+      doc.setFont("helvetica", "normal"); doc.setFontSize(10);
+      doc.text("Dólares en pesos (" + pm(p.totUsd, "USD") + " x " + rateLbl + ")", 17, y + 15); doc.text(pm(p.totUsd * rate), 193, y + 15, {align: "right"});
+      doc.setDrawColor(200, 190, 230); doc.line(17, y + 18.5, 193, y + 18.5);
+      doc.setFont("helvetica", "bold"); doc.setFontSize(12);
+      doc.text("Total en pesos", 17, y + 24); doc.text(pm(p.totArs + p.totUsd * rate), 193, y + 24, {align: "right"});
+    }
     doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(140); doc.text("Generado con Camoney el " + fmtD(todayStr()), 14, 289);
   });
   const name = (c.name + " " + mName(M) + (which == null ? "" : " " + (ppl[0].who || "Yo"))).replace(/[\\/:*?"<>|]/g, "").trim().replace(/\s+/g, "_") + ".pdf";
