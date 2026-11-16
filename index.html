@@ -465,7 +465,7 @@ function cardSchedule(ymT) {
     const cid = it.method.slice(5), c = card(cid), n = Math.max(1, it.cuotas || 1);
     const k = diffM(it.startYm || firstDue(c, it.date), ymT);
     if (k < 0 || k >= n) continue;
-    const per = it.amount / n, usd = isUsd(it);
+    const per = it.amount / n * (it.kind === "reint" ? -1 : 1), usd = isUsd(it);
     out.push({mov: it, cardId: cid, k: k + 1, n, ym: ymT, who: it.who || "", usd: usd ? per : 0, amt: usd ? per * cardRate(cid, ymT) : per});
   }
   return out;
@@ -511,6 +511,8 @@ async function fetchFx(force) {
 const fxAgo = () => { if (!FX.at) return ""; const m = Math.round((Date.now() - FX.at) / 60000); return m < 1 ? "recién" : m < 60 ? "hace " + m + " min" : m < 1440 ? "hace " + Math.round(m / 60) + " h" : "hace " + Math.round(m / 1440) + " días"; };
 const fxName = t => t ? "dólar " + (FX_TYPES[t] || t) : "dólar a mano";
 const isUsd = it => it.cur === "USD";
+const KIND_LBL = {reint: "Reintegro", imp: "Impuesto"};
+const buyLbl = it => (KIND_LBL[it.kind] ? KIND_LBL[it.kind] + (it.note ? ": " : "") : "") + (it.note || (KIND_LBL[it.kind] ? "" : cat(it.cat).n));
 const paidKey = (cid, ym, who) => cid + "|" + ym + "|" + who;
 const isPaid = (cid, ym, who) => !!(S.cfg.paid || {})[paidKey(cid, ym, who)];
 function movArs(it) {
@@ -562,27 +564,34 @@ function savTotals() {
   for (const a of S.cfg.accounts) { const b = accBalance(a); if (a.cur === "USD") usd += b; else ars += b; }
   return {ars, usd, total: ars + usd * gUsd()};
 }
-const cardPays = (cid, ym) => allItems().filter(i => i.cardPay === cid + "|" + ym);
-const cardPaid = (cid, ym) => cardPays(cid, ym).reduce((t, i) => t + i.amount, 0);
+/* pagos del resumen: cada uno dice de quién era la plata ("" = tuya). Solo los tuyos son gasto del mes */
+const cardPays = (cid, ym, who) => allItems().filter(i => i.cardPay === cid + "|" + ym && (who === undefined || (i.who || "") === who));
+const payArs = i => i.cur === "USD" ? i.amount * cardRate(...String(i.cardPay).split("|")) : i.amount;
+const cardPaid = (cid, ym, who = "") => cardPays(cid, ym, who).reduce((t, i) => t + payArs(i), 0);
+/* lo que le toca a cada persona en un resumen: {who: {ars, usd}} (con el PDF controlado, sale del reparto) */
+function cardShares(cid, M) {
+  const out = {"": {ars: 0, usd: 0}};
+  if ((S.cfg.stmts || {})[cid + "|" + M]) { const r = stmtCalc(cid, M); if (r) { r.ppl.forEach(p => { out[p.who] = {ars: p.totArs, usd: p.totUsd}; }); return out; } }
+  for (const s of cardSchedule(M)) { if (s.cardId !== cid) continue; const o = out[s.who] || (out[s.who] = {ars: 0, usd: 0}); if (s.usd) o.usd += s.usd; else o.ars += s.amt; }
+  for (const r of reintList(cid, M)) { const o = out[r.who || ""] || (out[r.who || ""] = {ars: 0, usd: 0}); o.ars -= r.amount; }
+  return out;
+}
 /* total del resumen: el del PDF si se controló, si no la suma de cuotas registradas */
 function cardDueTotal(cid, ym) {
   const st = (S.cfg.stmts || {})[cid + "|" + ym]; if (st) return st.ars + st.usd * cardRate(cid, ym);
   return cardSchedule(ym).filter(s => s.cardId === cid).reduce((t, s) => t + s.amt, 0) - reintTot(cid, ym);
 }
 /* tu parte del resumen (lo que sale de tu bolsillo): el total menos lo de las otras personas */
-function myCardPart(cid, ym) {
-  if ((S.cfg.stmts || {})[cid + "|" + ym]) { const r = stmtCalc(cid, ym), yo = r && r.ppl.find(p => !p.who); return yo ? yo.totArs + yo.totUsd * cardRate(cid, ym) : 0; }
-  const others = owedBy(cardSchedule(ym).filter(s => s.cardId === cid)).reduce((t, p) => t + p.total, 0);
-  return cardDueTotal(cid, ym) - others;
-}
+function myCardPart(cid, ym) { const yo = cardShares(cid, ym)[""]; return yo.ars + yo.usd * cardRate(cid, ym); }
 function stats(ym) {
   const items = S.months[ym] || [];
   let ing = 0, ingBud = 0, direct = 0; const byMethod = {efectivo: 0, debito: 0, mp: 0, tarjetas: 0}, byCat = {}, byCatAll = {}; let fromExtra = 0;
   for (const it of items) {
     if (it.type === "ingreso") { ing += it.amount; if (!it.noBud) ingBud += it.amount; continue; }
-    if (String(it.method).startsWith("card:")) continue;
-    direct += it.amount; byMethod[it.method] = (byMethod[it.method] || 0) + it.amount; byCatAll[it.cat] = (byCatAll[it.cat] || 0) + it.amount;
-    if (it.fromExtra) fromExtra += it.amount; else byCat[it.cat] = (byCat[it.cat] || 0) + it.amount;
+    if (String(it.method).startsWith("card:") || (it.cardPay && it.who)) continue;
+    const a = it.cardPay ? payArs(it) : it.amount;
+    direct += a; byMethod[it.method] = (byMethod[it.method] || 0) + a; byCatAll[it.cat] = (byCatAll[it.cat] || 0) + a;
+    if (it.fromExtra) fromExtra += a; else byCat[it.cat] = (byCat[it.cat] || 0) + a;
   }
   /* las compras con tarjeta viven en Tarjetas: acá solo se informan. Lo que cuenta como gasto del mes es el pago del resumen */
   const sched = cardSchedule(ym); let cards = 0, others = 0, noRate = false;
@@ -592,7 +601,7 @@ function stats(ym) {
   }
   for (const c of S.cfg.cards) { const own = reintTot(c.id, ym, ""); cards -= own; others -= reintTot(c.id, ym) - own; }
   const owed = owedBy(sched).reduce((t, p) => t + p.pend, 0);
-  byMethod.tarjetas = items.filter(it => it.type === "gasto" && !String(it.method).startsWith("card:") && (it.cardPay || it.cat === "pagotj")).reduce((t, it) => t + it.amount, 0);
+  byMethod.tarjetas = items.filter(it => it.type === "gasto" && !String(it.method).startsWith("card:") && !(it.cardPay && it.who) && (it.cardPay || it.cat === "pagotj")).reduce((t, it) => t + (it.cardPay ? payArs(it) : it.amount), 0);
   let ahorro = 0;
   for (const s of S.sav) {
     if (ymOf(s.date) !== ym) continue;
@@ -679,7 +688,7 @@ function vInicio() {
   const hasData = (S.months[M] || []).length || st.cards;
   /* resúmenes del mes que todavía no tienen el pago registrado en Gastos */
   let cardsLeft = 0; const unpaid = [];
-  for (const c of S.cfg.cards) { const due = myCardPart(c.id, M), left = Math.max(0, due - cardPaid(c.id, M)); cardsLeft += left; if (due > 0.5 && !cardPays(c.id, M).length) unpaid.push(c.name); }
+  for (const c of S.cfg.cards) { const due = myCardPart(c.id, M), left = Math.max(0, due - cardPaid(c.id, M)); cardsLeft += left; if (due > 0.5 && !cardPays(c.id, M, "").length) unpaid.push(c.name); }
   if (unpaid.length && M <= ymOf(todayStr())) alerts.push(`<div class="alert info">💳 Falta registrar el pago de ${esc(unpaid.join(" y "))}<button data-tab="cards">Ver</button></div>`);
   return `
   <div class="qbar"><button class="qbtn" data-act="quick">⚡ Registro rápido de gasto</button></div>
@@ -752,7 +761,7 @@ function itemRow(it) {
 }
 function vMovs() {
   const f = S.filter; if (f.method === "card") f.method = "all";
-  let items = (S.months[S.month] || []).filter(i => !String(i.method).startsWith("card:"));
+  let items = (S.months[S.month] || []).filter(i => !String(i.method).startsWith("card:") && !(i.cardPay && i.who));
   if (f.type !== "all") items = items.filter(i => i.type === f.type);
   if (f.method !== "all") items = items.filter(i => f.method === "card" ? String(i.method).startsWith("card:") : i.method === f.method);
   if (f.q) { const q = f.q.toLowerCase(); items = items.filter(i => (i.note || "").toLowerCase().includes(q) || cat(i.cat).n.toLowerCase().includes(q) || (i.who || "").toLowerCase().includes(q)); }
@@ -787,7 +796,7 @@ function vCards() {
     const usd0 = list.reduce((t, s) => t + s.usd, 0), rate = cardRate(c.id, M), ownRate = (S.cfg.cardUsd || {})[c.id + "|" + M];
     const rl = reintList(c.id, M), rTot = rl.reduce((t, r) => t + r.amount, 0);
     const ppl = owedBy(list), own = list.filter(s => !s.who).reduce((t, s) => t + s.amt, 0) - reintTot(c.id, M, "");
-    const paid = cardPaid(c.id, M);
+    const allPays = cardPays(c.id, M).sort((a, b) => a.date.localeCompare(b.date));
     const running = allItems().filter(it => it.type === "gasto" && it.method === "card:" + c.id && addM(startOf(it), Math.max(1, it.cuotas || 1) - 1) >= M).sort((a, b) => b.date.localeCompare(a.date));
     const ex = !!((c.cierreF || {})[M] || (c.cierres || {})[M]), nM = addM(M, 1), sr = (S.cfg.stmts || {})[c.id + "|" + M] ? stmtCalc(c.id, M) : null;
     html += `<div class="ccard" style="background:${esc(c.color || CARD_COLORS[i % CARD_COLORS.length])}">
@@ -796,15 +805,16 @@ function vCards() {
       ${(c.cierreF || {})[nM] ? `<div class="dt">Próximo: cierra ${fmtDs(closeDateOf(c, nM))} · vence ${fmtDs(vencDateOf(c, nM))}</div>` : ""}
       ${cardUsers(c).length ? `<div class="dt">La usan: vos, ${cardUsers(c).map(esc).join(", ")}</div>` : ""}
       <div class="due">Resumen que pagás en ${mOnly(M)}<b>${money(due)}</b></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="pbtn" style="margin:0" data-act="cardBuy" data-id="${esc(c.id)}">+ Cargar compra</button><button class="pbtn" style="margin:0" data-act="reint" data-id="${esc(c.id)}">+ Reintegro</button><button class="pbtn${paid > 0 ? " on" : ""}" style="margin:0" data-act="cardPay" data-id="${esc(c.id)}">${paid > 0 ? "✓ Pagado " + money(paid) : "Registrar pago"}</button></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="pbtn" style="margin:0" data-act="cardBuy" data-id="${esc(c.id)}">+ Cargar compra</button><button class="pbtn${allPays.length ? " on" : ""}" style="margin:0" data-act="cardPay" data-id="${esc(c.id)}">${allPays.length ? "Pagos: " + money(allPays.reduce((t, x) => t + payArs(x), 0)) + " · + pago" : "Registrar pago"}</button></div>
       <button class="pbtn${sr && sr.ok ? " on" : ""}" style="margin:6px 0 0" data-act="stmt" data-id="${esc(c.id)}">${sr ? (sr.ok ? "✓ Resumen controlado · ver reparto" : "⚠️ El resumen no coincide · revisar") : "🧾 Calcular importes del mes"}</button>
       ${usd0 ? `<div class="usdl"><span>Incluye ${money(usd0, "USD")}${rate ? " a " + money(rate) + (ownRate ? " (del resumen)" : " (" + fxName(S.cfg.cardFx || S.cfg.usdSrc) + ")") : " · <b>falta la cotización</b>"}</span><button class="pbtn" style="margin:0" data-act="cardUsd" data-id="${esc(c.id)}">${ownRate ? "Cambiar dólar" : "Usar el del resumen"}</button></div>` : ""}
       <div class="row"><div>En ${mOnly(addM(M, 1))}<b>${money(next)}</b></div><div style="text-align:right">Cuotas que faltan pagar<b>${money(future)}</b></div></div>
       ${ppl.length ? `<div class="split"><div class="cl"><span>Tuyo</span><b>${money(own)}</b></div>${ppl.map(p => { const pd = isPaid(c.id, M, p.who); return `<div class="cl"><span>${esc(p.who)}</span><span><b>${money(p.total)}</b><button class="pbtn${pd ? " on" : ""}" data-act="togglePaid" data-id="${esc(c.id)}" data-who="${esc(p.who)}">${pd ? "✓ Pagó" : "¿Pagó?"}</button></span></div>`; }).join("")}</div>` : ""}
-      ${list.length ? `<details><summary>Detalle de ${mOnly(M)} (${list.length})</summary>${list.map(s => `<div class="cl" data-act="editMov" data-id="${esc(s.mov.id)}" style="cursor:pointer"><span>${esc(s.mov.note || cat(s.mov.cat).n)}${s.n > 1 ? ` · cuota ${s.k}/${s.n}` : ""}${s.who ? `<span class="tg">${esc(s.who)}</span>` : ""}</span><b>${s.usd ? money(s.usd, "USD") : money(s.amt)}</b></div>`).join("")}</details>` : ""}
+      ${list.length ? `<details><summary>Detalle de ${mOnly(M)} (${list.length})</summary>${list.map(s => `<div class="cl" data-act="editMov" data-id="${esc(s.mov.id)}" style="cursor:pointer"><span>${esc(buyLbl(s.mov))}${s.n > 1 ? ` · cuota ${s.k}/${s.n}` : ""}${s.who ? `<span class="tg">${esc(s.who)}</span>` : ""}</span><b>${s.usd ? money(s.usd, "USD") : money(s.amt)}</b></div>`).join("")}</details>` : ""}
       ${rl.length ? `<div class="split"><div class="cl"><span><b>Reintegros de ${mOnly(M)}</b></span><b>−${money(rTot)}</b></div>${rl.map(r => `<div class="cl" data-act="reint" data-id="${esc(c.id)}" data-rid="${esc(r.id)}" style="cursor:pointer"><span>${esc(r.note || "Reintegro")}${r.who ? `<span class="tg">${esc(r.who)}</span>` : ""}</span><b>−${money(r.amount)}</b></div>`).join("")}</div>` : ""}
+      ${allPays.length ? `<details><summary>Pagos de ${mOnly(M)} (${allPays.length})</summary>${allPays.map(x => `<div class="cl" data-act="editMov" data-id="${esc(x.id)}" style="cursor:pointer"><span>${fmtDs(x.date)} · ${esc(x.who || "Yo")}</span><b>${money(x.amount, x.cur || "ARS")}</b></div>`).join("")}</details>` : ""}
       ${running.length ? `<details><summary>Compras en curso (${running.length})</summary>${running.map(it => { const st0 = startOf(it), n = Math.max(1, it.cuotas || 1), k = diffM(st0, M) + 1, cur = isUsd(it) ? "USD" : "ARS";
-        return `<div class="cl" data-act="editMov" data-id="${esc(it.id)}" style="cursor:pointer"><span>${esc(it.note || cat(it.cat).n)}<small style="display:block;opacity:.8">${n > 1 ? (k >= 1 ? "cuota " + k + " de " + n + " en " + mOnly(M) : "arranca en " + mOnly(st0)) + " · última en " + mOnly(addM(st0, n - 1)) : "1 pago en " + mOnly(st0)}</small>${it.who ? `<span class="tg">${esc(it.who)}</span>` : ""}</span><b>${money(it.amount, cur)}${n > 1 ? `<small style="display:block;font-weight:500;opacity:.8">${money(it.amount / n, cur)}/mes</small>` : ""}</b></div>`; }).join("")}</details>` : ""}
+        return `<div class="cl" data-act="editMov" data-id="${esc(it.id)}" style="cursor:pointer"><span>${esc(buyLbl(it))}<small style="display:block;opacity:.8">${n > 1 ? (k >= 1 ? "cuota " + k + " de " + n + " en " + mOnly(M) : "arranca en " + mOnly(st0)) + " · última en " + mOnly(addM(st0, n - 1)) : "1 pago en " + mOnly(st0)}</small>${it.who ? `<span class="tg">${esc(it.who)}</span>` : ""}</span><b>${it.kind === "reint" ? "−" : ""}${money(it.amount, cur)}${n > 1 ? `<small style="display:block;font-weight:500;opacity:.8">${money(it.amount / n, cur)}/mes</small>` : ""}</b></div>`; }).join("")}</details>` : ""}
     </div>`;
   });
   html += `<button class="btn ghost" data-act="newCard" style="margin:0 0 12px">+ Agregar tarjeta</button>`;
@@ -1019,12 +1029,40 @@ function methodOptions(type, cur, cardMode) {
 }
 /* compra con tarjeta: se carga desde Tarjetas y no se mezcla con los gastos del mes */
 function cardBuy(cid) { if (!S.cfg.cards.length) { cardForm(); return; } movForm({type: "gasto", amount: "", date: defDate(), cat: "", method: "card:" + (cid || S.cfg.cards[0].id), cuotas: 1, note: "", _new: true}, null, "card"); }
-/* pago del resumen: es el gasto que sí cuenta en el mes */
-function cardPayForm(cid) {
-  const c = card(cid); if (!c) return; const M = S.month, ex = cardPays(cid, M);
-  if (ex.length) { movForm(ex[0]); return; }
-  const t = todayStr();
-  movForm({type: "gasto", amount: Math.round(myCardPart(cid, M) * 100) / 100 || "", date: ymOf(t) === M ? t : vencDateOf(c, M), cat: S.cfg.cats.some(x => x.id === "pagotj") ? "pagotj" : "", method: "debito", cuotas: 1, note: "Pago " + c.name + " · " + mOnly(M), cardPay: cid + "|" + M, _new: true}, null, "plain");
+/* pago del resumen: cuánto, cuándo, en qué moneda y de quién era la plata (vos pagás, pero puede ser la parte de otro) */
+function cardPayForm(cid, M, pid) {
+  const c = card(cid); if (!c) return; M = M || S.month;
+  const key = cid + "|" + M, pays = cardPays(cid, M), pm = pid ? pays.find(x => x.id === pid) : null, isNew = !pm;
+  const sh = cardShares(cid, M), users = [...new Set([...cardUsers(c), ...Object.keys(sh).filter(Boolean), ...pays.map(x => x.who || "").filter(Boolean)])];
+  const paidBy = (who, cur) => pays.filter(x => (x.who || "") === who && (x.cur || "ARS") === cur && x.id !== pid).reduce((t, x) => t + x.amount, 0);
+  const sug = (who, cur) => { const o = sh[who] || {ars: 0, usd: 0}; return Math.max(0, Math.round(((cur === "USD" ? o.usd : o.ars) - paidBy(who, cur)) * 100) / 100); };
+  const t = todayStr(), m = pm || {amount: sug("", "ARS"), cur: "ARS", who: "", method: "debito", date: ymOf(t) >= M ? t : vencDateOf(c, M)};
+  const shareRows = ["", ...users].filter(w => sh[w] && (Math.abs(sh[w].ars) > 0.5 || Math.abs(sh[w].usd) > 0.004)).map(w => { const o = sh[w], pa = pays.filter(x => (x.who || "") === w);
+    return `<div class="fix"><div class="ico">${w ? "👤" : "🙋"}</div><div class="mid"><b>${esc(w || "Yo")}</b><small>${pa.length ? "Pagó " + pa.map(x => money(x.amount, x.cur || "ARS")).join(" + ") : "Sin pagos"}</small></div><div style="text-align:right"><b>${money(o.ars)}</b>${Math.abs(o.usd) > 0.004 ? `<small style="display:block;color:var(--mute)">${money(o.usd, "USD")}</small>` : ""}</div></div>`; }).join("");
+  openSheet(`<h2>${isNew ? "Registrar pago" : "Editar pago"}</h2><div class="note">${esc(c.name)} · resumen de ${mName(M)}. Lo que pagás con tu plata cuenta como gasto del mes; si es plata que te dio otra persona para su parte, elegila en “¿De quién es la plata?”.</div>
+    <div class="lab">Lo que le toca a cada uno</div>${shareRows || `<div class="empty">No hay compras cargadas en este resumen.</div>`}
+    <form id="f" autocomplete="off">
+    <div class="lab">Moneda</div><div class="seg" style="margin-bottom:0">${radio("cur", "ARS", "Pesos", m.cur || "ARS")}${radio("cur", "USD", "Dólares", m.cur || "ARS")}</div>
+    <div class="bigin"><span id="paySym">${m.cur === "USD" ? "US$" : "$"}</span><input name="amount" inputmode="decimal" placeholder="0" value="${m.amount ? numIn(m.amount) : ""}"></div>
+    <label class="fld" style="margin-top:0"><span>¿De quién es la plata?</span><select name="who"><option value="">🙋 Mía</option>${users.map(u => `<option value="${esc(u)}" ${m.who === u ? "selected" : ""}>${esc(u)}</option>`).join("")}</select></label>
+    <div id="payMet"><div class="lab">¿Con qué pagaste?</div><div class="chips">${BASE_METHODS.map(x => radio("method", x.id, x.i + " " + x.n, m.method || "debito")).join("")}</div></div>
+    <label class="fld"><span>Fecha del pago</span><input type="date" name="date" value="${esc(m.date)}" required></label>
+    <button class="btn primary">Guardar pago</button>${isNew ? "" : `<button type="button" class="btn danger" id="delBtn">Eliminar pago</button>`}</form>
+    ${pays.filter(x => x.id !== pid).length ? `<div class="lab">Pagos ya registrados</div>` + pays.filter(x => x.id !== pid).map(x => `<button class="item" data-act="editMov" data-id="${esc(x.id)}"><div class="ico">💳</div><div class="mid"><b>${esc(x.who || "Yo")}</b><small>${fmtD(x.date)}</small></div><div class="amt out">${money(x.amount, x.cur || "ARS")}</div></button>`).join("") : ""}`);
+  const f = $("#f"); let dirty = !isNew;
+  f.elements.amount.addEventListener("input", () => { dirty = true; });
+  const upd = () => { const cur = val(f, "cur"), who = val(f, "who"); $("#paySym").textContent = cur === "USD" ? "US$" : "$"; $("#payMet").classList.toggle("hidden", !!who); if (!dirty) { const v = sug(who, cur); f.elements.amount.value = v ? numIn(v) : ""; } };
+  f.addEventListener("change", e => { if (e.target.name === "cur" || e.target.name === "who") upd(); }); upd();
+  f.onsubmit = e => { e.preventDefault(); const amount = parseAmt(val(f, "amount")), date = val(f, "date"), who = val(f, "who"), cur = val(f, "cur");
+    if (!(amount > 0)) { toast("Poné cuánto se pagó"); return; } if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { toast("Revisá la fecha"); return; }
+    const pc = S.cfg.cats.find(x => x.id === "pagotj") || S.cfg.cats.find(x => x.t === "gasto");
+    const nm = {id: pm ? pm.id : gid(), ts: pm ? pm.ts : Date.now(), type: "gasto", amount, date, cat: pc ? pc.id : "otros", method: who ? "debito" : val(f, "method") || "debito", cuotas: 1, note: "Pago " + c.name + " · " + mOnly(M) + (who ? " (de " + who + ")" : ""), cardPay: key};
+    if (cur === "USD") nm.cur = "USD"; if (who) nm.who = who;
+    upsertMov(nm, pm || null);
+    /* si la persona ya cubrió su parte, queda tildada como "pagó" */
+    if (who) { const o = sh[who] || {ars: 0, usd: 0}, owe = o.ars + o.usd * cardRate(cid, M); if (owe > 0 && cardPaid(cid, M, who) >= owe - 0.5) S.cfg.paid = {...(S.cfg.paid || {}), [paidKey(cid, M, who)]: true}, persist("config"); }
+    closeSheet(); toast("Pago guardado"); render(); };
+  if (!isNew) twoTap($("#delBtn"), () => { removeMov(pm); closeSheet(); toast("Pago eliminado"); render(); });
 }
 
 function movForm(it, onDone, mode) {
@@ -1032,28 +1070,29 @@ function movForm(it, onDone, mode) {
   const CM = (mode || (it && String(it.method).startsWith("card:") ? "card" : "plain")) === "card";
   const m = it ? (({_new, ...r}) => r)(it) : {type: "gasto", amount: "", date: defDate(), cat: "", method: "efectivo", cuotas: 1, note: ""};
   if (!CM && String(m.method).startsWith("card:")) m.method = "efectivo";
-  openSheet(`<h2>${CM ? (isNew ? "Compra con tarjeta" : "Editar compra con tarjeta") : m.cardPay ? "Pago de la tarjeta" : isNew ? "Nuevo movimiento" : "Editar movimiento"}</h2>
-  ${CM && isNew ? `<div class="note" style="margin-bottom:8px">Si es una compra que ya venías pagando, poné la fecha de compra o elegí en qué cuota va: la app calcula el resto.</div>` : ""}
-  ${m.cardPay ? `<div class="note" style="margin-bottom:8px">Anotá lo que pusiste vos para pagar el resumen y con qué (lo de las otras personas va directo a la tarjeta). Esto es lo que cuenta como gasto del mes.${(() => { const [cid, ym] = m.cardPay.split("|"), tot = cardDueTotal(cid, ym), mine = myCardPart(cid, ym); return tot - mine > 0.5 ? " Total del resumen: " + money(tot) + " · tu parte: " + money(mine) + "." : ""; })()}</div>` : ""}
+  const K0 = m.kind || "compra";
+  openSheet(`<h2>${CM ? (isNew ? "Cargar en la tarjeta" : "Editar " + (KIND_LBL[K0] || "compra").toLowerCase()) : isNew ? "Nuevo movimiento" : "Editar movimiento"}</h2>
   <form id="f" autocomplete="off">
+    ${CM ? `<div class="seg">${radio("kind", "compra", "Compra", K0)}${radio("kind", "reint", "Reintegro", K0)}${radio("kind", "imp", "Impuesto", K0)}</div><div class="note" id="kindNote" style="margin:-4px 0 8px"></div>` : ""}
     <div class="seg${CM ? " hidden" : ""}">${radio("type", "gasto", "Gasto", m.type)}${radio("type", "ingreso", "Ingreso", m.type)}</div>
     <div class="bigin"><span id="curSym">$</span><input name="amount" inputmode="decimal" placeholder="0" value="${m.amount !== "" ? numIn(m.amount) : ""}"></div>
     <label class="fld" style="margin-top:0"><span>Descripción (opcional)</span><input name="note" value="${esc(m.note || "")}" maxlength="80" placeholder="Ej: compra en el chino, heladera…"></label>
-    <label class="fld"><span>Categoría${CM ? " (opcional)" : ""}</span><select name="cat" id="catSel"></select></label>
+    <label class="fld" id="catBox"><span>Categoría${CM ? " (opcional)" : ""}</span><select name="cat" id="catSel"></select></label>
     <div class="hint hidden" id="budInfo"></div>
     <div class="lab">${CM ? "Tarjeta" : "Medio de pago"}</div><div class="chips" id="metChips"></div>
     <div id="cuotasBox" class="hidden">
       <div class="lab">Moneda</div><div class="seg" style="margin-bottom:0">${radio("cur", "ARS", "Pesos", m.cur || "ARS")}${radio("cur", "USD", "Dólares", m.cur || "ARS")}</div>
-      <label class="fld"><span>Cuotas</span><select name="cuotas">${[...Array.from({length: 24}, (_, i) => i + 1), 30, 36].map(n => `<option value="${n}" ${n === (m.cuotas || 1) ? "selected" : ""}>${n === 1 ? "1 pago" : n + " cuotas"}</option>`).join("")}</select></label>
+      <label class="fld" id="resBox"><span>¿En qué resumen va?</span><select name="resYm">${[-1, 0, 1, 2].map(j => { const y = addM(S.month, j); return `<option value="${y}" ${(m.startYm || S.month) === y ? "selected" : ""}>${mName(y)}</option>`; }).join("")}</select></label>
+      <label class="fld" id="cuoBox"><span>Cuotas</span><select name="cuotas">${[...Array.from({length: 24}, (_, i) => i + 1), 30, 36].map(n => `<option value="${n}" ${n === (m.cuotas || 1) ? "selected" : ""}>${n === 1 ? "1 pago" : n + " cuotas"}</option>`).join("")}</select></label>
       <label class="fld hidden" id="kBox"><span id="kLbl"></span><select name="kNow"></select></label>
       <div class="hint" id="cuotaInfo"></div>
-      <label class="fld"><span>¿Quién hizo la compra?</span><select name="who" id="whoSel"></select></label>
+      <label class="fld"><span id="whoLbl">¿Quién hizo la compra?</span><select name="who" id="whoSel"></select></label>
       <label class="fld hidden" id="newWhoBox"><span>Nombre (queda guardado en esta tarjeta)</span><input name="newWho" maxlength="30" placeholder="Ej: Lisandro, Mamá"></label>
     </div>
     <label class="chk hidden" id="splitChk"><input type="checkbox" name="split"> <span>Dividir entre las semanas que faltan del mes <small id="splitInfo" style="color:var(--mute);font-weight:500"></small></span></label>
     <label class="chk hidden" id="exChk"><input type="checkbox" name="fromExtra" ${m.fromExtra ? "checked" : ""}> <span>Salió de mis ingresos extra <small id="exLeft" style="color:var(--mute);font-weight:500"></small></span></label>
     <label class="chk hidden" id="budChk"><input type="checkbox" name="inBud" ${m.noBud ? "" : "checked"}> Contar este ingreso en el presupuesto del mes</label>
-    <label class="fld"><span>${CM ? "Fecha de compra" : "Fecha"}</span><input type="date" name="date" value="${esc(m.date)}" required></label>
+    <label class="fld"><span id="dateLbl">${CM ? "Fecha de compra" : "Fecha"}</span><input type="date" name="date" value="${esc(m.date)}" required></label>
     <button class="btn primary" type="submit">Guardar</button>
     ${isNew ? "" : `<button type="button" class="btn danger" id="delBtn">Eliminar</button>`}
   </form>`, onDone);
@@ -1075,7 +1114,7 @@ function movForm(it, onDone, mode) {
   /* "¿qué cuota cae en el resumen del mes que estás mirando?": por defecto sale de la fecha de compra */
   let kInit = true;
   const drawK = () => { const box = $("#kBox"), sel = f.elements.kNow, c = selCard(), n = Number(val(f, "cuotas")) || 1, date = val(f, "date");
-    if (!c || n < 2 || !/^\d{4}-\d{2}-\d{2}$/.test(date)) { box.classList.add("hidden"); return; }
+    if (!c || n < 2 || kindOf() !== "compra" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) { box.classList.add("hidden"); return; }
     box.classList.remove("hidden"); const ref = S.month, fd = firstDue(c, date), auto = diffM(fd, ref) + 1;
     let cur = sel.options.length ? sel.value : "";
     let keep = "";
@@ -1088,7 +1127,8 @@ function movForm(it, onDone, mode) {
       (keep ? `<option value="keep">Como estaba (la 1ª cae en ${mOnly(keep)})</option>` : "") +
       Array.from({length: n}, (_, i) => `<option value="${i + 1}">Cuota ${i + 1} de ${n}</option>`).join("");
     sel.value = cur; };
-  const startFromForm = () => { const k = val(f, "kNow"), n = Number(val(f, "cuotas")) || 1; if (n < 2 || $("#kBox").classList.contains("hidden")) return ""; if (k === "keep") return m.startYm || ""; return k ? addM(S.month, -(Number(k) - 1)) : ""; };
+  const kindOf = () => CM ? val(f, "kind") || "compra" : "compra";
+  const startFromForm = () => { if (kindOf() !== "compra") return val(f, "resYm"); const k = val(f, "kNow"), n = Number(val(f, "cuotas")) || 1; if (n < 2 || $("#kBox").classList.contains("hidden")) return ""; if (k === "keep") return m.startYm || ""; return k ? addM(S.month, -(Number(k) - 1)) : ""; };
   const drawMet = () => { const t = val(f, "type"); let cur = f.elements.method ? val(f, "method") : m.method; if (t === "ingreso" && String(cur).startsWith("card:")) cur = "debito"; $("#metChips").innerHTML = methodOptions(t, cur, CM); if (!val(f, "method")) { const first = f.querySelector('input[name="method"]'); if (first) first.checked = true; } drawWho(); drawK(); upd(); };
   const upd = () => { const isInc = val(f, "type") === "ingreso"; $("#budChk").classList.toggle("hidden", !isInc);
     const showEx = !isInc && (hasExtras() || m.fromExtra); $("#exChk").classList.toggle("hidden", !showEx);
@@ -1096,7 +1136,15 @@ function movForm(it, onDone, mode) {
     const sw = /^\d{4}-\d{2}-\d{2}$/.test(val(f, "date")) ? splitWeeks(val(f, "date")) : [];
     const canSplit = isNew && !isInc && isWeekCat(val(f, "cat")) && !String(val(f, "method")).startsWith("card:") && sw.length > 1;
     $("#splitChk").classList.toggle("hidden", !canSplit);
-    if (canSplit) { const a = parseAmt(val(f, "amount")); $("#splitInfo").textContent = "· " + sw.length + " semanas (" + sw.map(k => k).join(", ") + ")" + (a > 0 ? ": " + money(a / sw.length) + " c/u" : ""); } const isCard = String(val(f, "method")).startsWith("card:"); $("#cuotasBox").classList.toggle("hidden", !isCard); const usd = isCard && val(f, "cur") === "USD"; $("#curSym").textContent = usd ? "US$" : "$"; $("#newWhoBox").classList.toggle("hidden", val(f, "who") !== "__new"); const n = Number(val(f, "cuotas")) || 1, a = parseAmt(val(f, "amount")); let info = ""; if (isCard) { const c = card(val(f, "method").slice(5)); if (n > 1 && a > 0) info = n + " cuotas de " + money(a / n, usd ? "USD" : "ARS") + ". "; if (c && /^\d{4}-\d{2}-\d{2}$/.test(val(f, "date"))) { const st = startFromForm() || firstDue(c, val(f, "date")); info += n > 1 ? "La 1ª cae en el resumen de " + mOnly(st) + " y la última en el de " + mOnly(addM(st, n - 1)) + "." : "Cae en el resumen de " + mOnly(st) + "."; if (usd && a > 0) { const r = cardRate(c.id, st); info += r ? " ≈ " + money(a / n * r) + (n > 1 ? " por cuota" : "") + " (" + fxName(S.cfg.cardFx || S.cfg.usdSrc) + " a " + money(r) + ")." : " Falta la cotización del dólar."; } } } $("#cuotaInfo").textContent = info; if (CM) ["exChk", "splitChk", "budChk"].forEach(id => $("#" + id).classList.add("hidden")); budHint(); };
+    if (canSplit) { const a = parseAmt(val(f, "amount")); $("#splitInfo").textContent = "· " + sw.length + " semanas (" + sw.map(k => k).join(", ") + ")" + (a > 0 ? ": " + money(a / sw.length) + " c/u" : ""); } const isCard = String(val(f, "method")).startsWith("card:"); $("#cuotasBox").classList.toggle("hidden", !isCard); const usd = isCard && val(f, "cur") === "USD"; $("#curSym").textContent = usd ? "US$" : "$"; $("#newWhoBox").classList.toggle("hidden", val(f, "who") !== "__new"); const n = Number(val(f, "cuotas")) || 1, a = parseAmt(val(f, "amount")); let info = ""; if (isCard) { const c = card(val(f, "method").slice(5)); if (n > 1 && a > 0) info = n + " cuotas de " + money(a / n, usd ? "USD" : "ARS") + ". "; if (c && /^\d{4}-\d{2}-\d{2}$/.test(val(f, "date"))) { const st = startFromForm() || firstDue(c, val(f, "date")); info += n > 1 ? "La 1ª cae en el resumen de " + mOnly(st) + " y la última en el de " + mOnly(addM(st, n - 1)) + "." : "Cae en el resumen de " + mOnly(st) + "."; if (usd && a > 0) { const r = cardRate(c.id, st); info += r ? " ≈ " + money(a / n * r) + (n > 1 ? " por cuota" : "") + " (" + fxName(S.cfg.cardFx || S.cfg.usdSrc) + " a " + money(r) + ")." : " Falta la cotización del dólar."; } } } $("#cuotaInfo").textContent = info; if (CM) { ["exChk", "splitChk", "budChk"].forEach(id => $("#" + id).classList.add("hidden")); applyKind(); } budHint(); };
+  /* reintegro: resta en el resumen elegido; impuesto: suma. Los dos se le cargan a quien elijas */
+  const applyKind = () => { const k = kindOf(), plain = k === "compra";
+    $("#cuoBox").classList.toggle("hidden", !plain); $("#resBox").classList.toggle("hidden", plain); $("#catBox").classList.toggle("hidden", !plain);
+    $("#dateLbl").textContent = plain ? "Fecha de compra" : "Fecha";
+    $("#whoLbl").textContent = plain ? "¿Quién hizo la compra?" : k === "reint" ? "¿De quién es el reintegro?" : "¿A quién se lo cargo?";
+    f.elements.note.placeholder = plain ? "Ej: compra en el chino, heladera…" : k === "reint" ? "Ej: 20% en Coto, cashback…" : "Ej: IVA, sellos, percepción…";
+    $("#kindNote").textContent = plain ? "Si es una compra que ya venías pagando, poné la fecha de compra o elegí en qué cuota va: la app calcula el resto." : k === "reint" ? "Bonificación o reintegro de un negocio: se resta del resumen." : "Impuestos o cargos del resumen (IVA, sellos, percepciones…): se suman a la persona que elijas.";
+    if (!plain) { const a = parseAmt(val(f, "amount")), cur = val(f, "cur") === "USD" ? "USD" : "ARS"; $("#cuotaInfo").textContent = (k === "reint" ? "Se resta " : "Se suma ") + (a > 0 ? money(a, cur) + " " : "") + "en el resumen de " + mOnly(val(f, "resYm")) + "."; } };
   const budHint = () => {
     const box = $("#budInfo"), c = val(f, "cat"), date = val(f, "date"), method = val(f, "method");
     box.classList.add("hidden"); if (CM) return;
@@ -1117,7 +1165,7 @@ function movForm(it, onDone, mode) {
     if (e.target.name === "type") { drawCats(); drawMet(); return; }
     if (e.target.name === "date") drawCats();
     if (e.target.name === "method") drawWho();
-    if (["method", "cuotas", "date"].includes(e.target.name)) drawK();
+    if (["method", "cuotas", "date", "kind"].includes(e.target.name)) drawK();
     if (e.target.name === "inBud" && !e.target.checked) { const id = extraCatId(true); drawCats(); $("#catSel").value = id; }
     upd(); });
   f.elements.amount.addEventListener("input", upd);
@@ -1133,12 +1181,13 @@ function movForm(it, onDone, mode) {
     const nm = {id: m.id || gid(), ts: m.ts || Date.now(), type: CM ? "gasto" : val(f, "type"), amount, date, cat: val(f, "cat") || (S.cfg.cats.some(x => x.id === "otros") ? "otros" : (S.cfg.cats.find(x => x.t === "gasto") || {}).id || "otros"), method, cuotas: isCard ? Number(val(f, "cuotas")) || 1 : 1, note: val(f, "note").trim()};
     if (m.fixedId) nm.fixedId = m.fixedId;
     if (m.cardPay && !CM) nm.cardPay = m.cardPay;
+    if (CM && kindOf() !== "compra") { nm.kind = kindOf(); nm.cuotas = 1; }
     if (m.paidKey) nm.paidKey = m.paidKey;
     if (nm.type === "ingreso" && !f.elements.inBud.checked) { nm.noBud = true; nm.cat = extraCatId(true); }
     if (nm.type === "gasto" && f.elements.fromExtra.checked && !CM) nm.fromExtra = true;
     if (isCard) {
       if (val(f, "cur") === "USD") nm.cur = "USD";
-      const st = startFromForm(); if (st && nm.cuotas > 1) nm.startYm = st;
+      const st = startFromForm(); if (st && (nm.cuotas > 1 || nm.kind)) nm.startYm = st;
       let who = val(f, "who");
       if (who === "__new") { who = val(f, "newWho").trim(); if (!who) { toast("Poné el nombre de la persona"); return; } }
       if (who) {
@@ -1408,21 +1457,22 @@ function stmtReview(cid, p) {
   const d = {cierre: p.cierre || closeDateOf(c, M0), venc: p.venc || vencDateOf(c, M0), proxCierre: p.proxCierre || closeDateOf(c, nM0), proxVenc: p.proxVenc || vencDateOf(c, nM0)};
   const cg = p.cargos || [], got = ["cierre", "venc", "proxCierre", "proxVenc"].filter(k => p[k]).length;
   const sumC = (usd, f) => Math.round(cg.reduce((t, x, i) => t + (x.usd === usd && (!f || f.elements["cg" + i].checked) ? x.v : 0), 0) * 100) / 100;
-  const cA = p.cArs != null ? p.cArs : sumC(false), cU = p.cUsd != null ? p.cUsd : sumC(true);
+  const hasImp = M => cardSchedule(M).some(s => s.cardId === cid && s.mov.kind === "imp");
   const amt = v => v != null && v !== "" ? numIn(v) : "";
   const note = p.note || (p.lines ? (got === 4 && p.ars != null ? "Esto es lo que encontré en el PDF. Fijate que esté bien y corregí lo que haga falta." : "No pude leer todo del PDF: completá lo que falta mirando el resumen.") : "Completá los datos mirando el resumen.");
   openSheet(`<h2>Revisá los datos del resumen</h2><div class="note">${esc(note)}</div><form id="f" autocomplete="off">
     <div class="two"><label class="fld"><span>Cierre</span><input type="date" name="cierre" value="${d.cierre}"></label><label class="fld"><span>Vencimiento</span><input type="date" name="venc" value="${d.venc}" required></label></div>
     <div class="two"><label class="fld"><span>Próximo cierre</span><input type="date" name="proxCierre" value="${d.proxCierre}"></label><label class="fld"><span>Próximo vencimiento</span><input type="date" name="proxVenc" value="${d.proxVenc}"></label></div>
     <div class="two"><label class="fld"><span>Saldo a pagar en pesos</span><input name="ars" inputmode="decimal" value="${amt(p.ars)}" placeholder="0"></label><label class="fld"><span>Saldo a pagar en dólares</span><input name="usd" inputmode="decimal" value="${amt(p.usd)}" placeholder="0"></label></div>
-    ${cg.length ? `<div class="lab">Impuestos y cargos que encontré</div>` + cg.map((x, i) => `<label class="chk"><input type="checkbox" name="cg${i}" checked> <span>${esc(x.t)} · <b>${money(x.v, x.usd ? "USD" : "ARS")}</b></span></label>`).join("") : ""}
-    <div class="two"><label class="fld"><span>Impuestos y cargos en pesos</span><input name="cArs" inputmode="decimal" value="${amt(cA || "")}" placeholder="0"></label><label class="fld"><span>Impuestos y cargos en dólares</span><input name="cUsd" inputmode="decimal" value="${amt(cU || "")}" placeholder="0"></label></div>
-    <div class="note">Es lo que el banco suma y no cargaste como compra (percepciones, IVA, sellos, intereses, comisiones). Se suma a lo registrado para comparar.</div>
-    <label class="fld"><span>¿Quién paga los impuestos y cargos?</span><select name="cWho"><option value="yo">Yo</option><option value="prop" ${p.cWho === "prop" ? "selected" : ""}>Repartirlos según lo que gastó cada uno</option></select></label>
+    ${cg.length ? `<div class="lab">Impuestos que figuran en el resumen</div>` + cg.map((x, i) => `<label class="chk"><input type="checkbox" name="cg${i}" checked> <span>${esc(x.t)} · <b>${money(x.v, x.usd ? "USD" : "ARS")}</b></span></label>`).join("") +
+      `<label class="chk" style="margin-top:8px"><input type="checkbox" name="addImp" ${hasImp(M0) ? "" : "checked"}> <span>Cargarlos en la tarjeta como impuesto <b id="impSum"></b>${hasImp(M0) ? `<small style="display:block;color:var(--mute);font-weight:500">Ya hay impuestos cargados en este resumen.</small>` : ""}</span></label>
+      <label class="fld" id="impWhoBox"><span>¿A quién se los cargo?</span><select name="impWho"><option value="">🙋 Yo</option>${cardUsers(c).map(u => `<option value="${esc(u)}">${esc(u)}</option>`).join("")}</select></label>` :
+      `<div class="note" style="margin-top:8px">Si el resumen trae impuestos (IVA, sellos, percepciones), cargalos con “+ Cargar compra” → Impuesto, así se suman a quien corresponda.</div>`}
     ${p.lines ? `<details style="margin-top:10px"><summary class="note" style="cursor:pointer">Ver el texto que leí del PDF</summary><pre style="white-space:pre-wrap;font-size:11px;color:var(--mute);max-height:240px;overflow:auto">${esc(p.lines.join("\n").slice(0, 8000))}</pre></details>` : ""}
-    <button class="btn primary">Comparar con lo registrado</button></form>`, () => stmtForm(cid));
+    <button class="btn primary">Comparar con lo cargado</button></form>`, () => stmtForm(cid));
   const f = $("#f");
-  f.addEventListener("change", e => { if (/^cg\d+$/.test(e.target.name)) { f.elements.cArs.value = amt(sumC(false, f) || ""); f.elements.cUsd.value = amt(sumC(true, f) || ""); } });
+  const sumLbl = () => { if (!$("#impSum")) return; const a = sumC(false, f), u = sumC(true, f); $("#impSum").textContent = "(" + [a ? money(a) : "", u ? money(u, "USD") : ""].filter(Boolean).join(" + ") + ")"; $("#impWhoBox").classList.toggle("hidden", !f.elements.addImp.checked); };
+  f.addEventListener("change", sumLbl); sumLbl();
   f.onsubmit = e => { e.preventDefault();
     const ok = k => /^\d{4}-\d{2}-\d{2}$/.test(val(f, k)) ? val(f, k) : "";
     const venc = ok("venc"), cierre = ok("cierre"), pc = ok("proxCierre"), pv = ok("proxVenc");
@@ -1433,7 +1483,13 @@ function stmtReview(cid, p) {
     vf[M] = venc; if (cierre) cf[M] = cierre;
     if (nM > M && pc && pv) { cf[nM] = pc; vf[nM] = pv; }
     S.cfg.cards = S.cfg.cards.map(x => x.id === cid ? {...x, cierreF: cf, vencF: vf} : x);
-    S.cfg.stmts = {...(S.cfg.stmts || {}), [cid + "|" + M]: {ars: n("ars"), usd: n("usd"), cArs: n("cArs"), cUsd: n("cUsd"), cWho: val(f, "cWho"), at: Date.now()}};
+    if (f.elements.addImp && f.elements.addImp.checked) {
+      const who = val(f, "impWho"), base = {type: "gasto", date: cierre || venc, cat: "otros", method: "card:" + cid, cuotas: 1, note: "Impuestos del resumen", kind: "imp", startYm: M, ...(who ? {who} : {})};
+      const a = sumC(false, f), u = sumC(true, f);
+      if (a) upsertMov({...base, id: gid(), ts: Date.now(), amount: a}, null);
+      if (u) upsertMov({...base, id: gid(), ts: Date.now(), amount: u, cur: "USD"}, null);
+    }
+    S.cfg.stmts = {...(S.cfg.stmts || {}), [cid + "|" + M]: {ars: n("ars"), usd: n("usd"), cArs: 0, cUsd: 0, cWho: "yo", at: Date.now()}};
     persist("config"); S.month = M; render(); stmtResult(cid, M); };
 }
 /* compara lo registrado del resumen con lo del banco y arma el reparto por persona */
@@ -1452,20 +1508,20 @@ function stmtCalc(cid, M) {
     ppl.forEach(p => { const sh = tot > 0 ? w(p) / tot : (p.who ? 0 : 1); p.cArs = st.cArs * sh; p.cUsd = st.cUsd * sh; }); }
   else { ppl[0].cArs = st.cArs; ppl[0].cUsd = st.cUsd; }
   ppl.forEach(p => { p.totArs = p.ars - p.re + p.cArs; p.totUsd = p.usd + p.cUsd; });
-  return {c, st, M, rTot, regArs, regUsd, dA, dU, ok: Math.abs(dA) <= TOL_ARS && Math.abs(dU) <= TOL_USD, ppl: ppl.filter(p => p.items.length || p.re || Math.abs(p.cArs) > 0.004 || Math.abs(p.cUsd) > 0.004)};
+  return {c, st, M, rTot, regArs, regUsd, dA, dU, ok: Math.abs(dA) <= TOL_ARS && Math.abs(dU) <= TOL_USD, ppl: ppl.filter(p => !p.who || p.items.length || p.re || Math.abs(p.cArs) > 0.004 || Math.abs(p.cUsd) > 0.004)};
 }
 function stmtResult(cid, M, force) {
   const r = stmtCalc(cid, M); if (!r) return; const {c, st} = r, nM = addM(M, 1);
   const df = (d, cur) => Math.abs(d) < 0.005 ? "iguales" : d > 0 ? "el resumen tiene " + money(d, cur) + " más" : "el resumen tiene " + money(-d, cur) + " menos";
   let h = `<h2>${esc(c.name)} · ${mName(M)}</h2><div class="note">Cierre ${fmtD(closeDateOf(c, M))} · vence ${fmtD(vencDateOf(c, M))}</div>
-    <div class="tiles" style="margin-top:10px"><div class="tile"><span>Pesos · resumen</span><b>${money(st.ars)}</b></div><div class="tile"><span>Pesos · registrado${r.rTot ? " − reintegros" : ""}${st.cArs ? " + cargos" : ""}</span><b>${money(r.regArs + st.cArs)}</b></div>
-    <div class="tile"><span>Dólares · resumen</span><b>${money(st.usd, "USD")}</b></div><div class="tile"><span>Dólares · registrado${st.cUsd ? " + cargos" : ""}</span><b>${money(r.regUsd + st.cUsd, "USD")}</b></div></div>`;
+    <div class="tiles" style="margin-top:10px"><div class="tile"><span>Pesos · resumen</span><b>${money(st.ars)}</b></div><div class="tile"><span>Pesos · cargado en la app${st.cArs ? " + cargos" : ""}</span><b>${money(r.regArs + st.cArs)}</b></div>
+    <div class="tile"><span>Dólares · resumen</span><b>${money(st.usd, "USD")}</b></div><div class="tile"><span>Dólares · cargado en la app${st.cUsd ? " + cargos" : ""}</span><b>${money(r.regUsd + st.cUsd, "USD")}</b></div></div>`;
   if (!r.ok) h += `<div class="alert" style="margin-top:10px">⚠️ Los importes no coinciden. Pesos: ${df(r.dA)}. Dólares: ${df(r.dU, "USD")}.</div>
-    <div class="note">Puede faltar cargar alguna compra, cuota o reintegro, haber una compra en el resumen equivocado o impuestos y cargos sin sumar. Cargá lo que falte y volvé a tocar el botón de la tarjeta.</div>
+    <div class="note">Puede faltar cargar alguna compra, cuota, reintegro o impuesto, o haber algo en el resumen equivocado. Cargá lo que falte y volvé a tocar el botón de la tarjeta.</div>
     <button class="btn primary" data-x="review">Revisar los datos del resumen</button>${force ? "" : `<button class="btn ghost" data-x="force">Ver el reparto igual</button>`}`;
   else h += `<div class="alert info" style="margin-top:10px">✅ Los importes coinciden${Math.abs(r.dA) > 0.5 || Math.abs(r.dU) > 0.005 ? " (diferencia de " + money(Math.abs(r.dA)) + " y " + money(Math.abs(r.dU), "USD") + ")" : ""}.</div>`;
   if (r.ok || force) {
-    h += `<div class="lab">Cuánto paga cada uno</div>` + r.ppl.map((p, i) => `<div class="owe"><div class="ico">${p.who ? "👤" : "🙋"}</div><div class="mid"><b>${esc(p.who || "Yo")}</b><small>${p.items.length} gasto${p.items.length === 1 ? "" : "s"}${p.re ? " − reintegros" : ""}${p.cArs || p.cUsd ? " + cargos" : ""}</small></div><div style="text-align:right"><b>${money(p.totArs)}</b><small style="display:block;color:var(--mute);font-size:12px">${money(p.totUsd, "USD")}</small></div><button class="mini" data-x="pdf" data-i="${i}">PDF</button></div>`).join("") +
+    h += `<div class="lab">Cuánto paga cada uno</div>` + r.ppl.map((p, i) => `<div class="owe"><div class="ico">${p.who ? "👤" : "🙋"}</div><div class="mid"><b>${esc(p.who || "Yo")}</b><small>${p.items.length} movimiento${p.items.length === 1 ? "" : "s"}${(() => { const pa = cardPays(cid, M, p.who); return pa.length ? " · pagó " + pa.map(x => money(x.amount, x.cur || "ARS")).join(" + ") : ""; })()}</small></div><div style="text-align:right"><b>${money(p.totArs)}</b><small style="display:block;color:var(--mute);font-size:12px">${money(p.totUsd, "USD")}</small></div><button class="mini" data-x="pdf" data-i="${i}">PDF</button></div>`).join("") +
       `<button class="btn primary" data-x="all">PDF con todos</button>`;
   }
   if ((c.cierreF || {})[nM]) h += `<div class="note" style="margin-top:10px">Próximo resumen: cierra el ${fmtD(closeDateOf(c, nM))} y vence el ${fmtD(vencDateOf(c, nM))}. Ya quedó guardado en la tarjeta para ubicar bien las compras nuevas.</div>`;
@@ -1500,7 +1556,7 @@ async function stmtPdf(cid, M, which) {
       doc.setDrawColor(225, 225, 225); doc.line(14, y + 2, 196, y + 2); y += 6.5; };
     head();
     p.items.slice().sort((a, b) => a.mov.date < b.mov.date ? -1 : a.mov.date > b.mov.date ? 1 : 0).forEach(s =>
-      line(fmtD(s.mov.date), s.mov.note || cat(s.mov.cat).n, s.n > 1 ? s.k + " de " + s.n : "-", s.usd ? "" : pm(s.amt), s.usd ? pm(s.usd, "USD") : ""));
+      line(fmtD(s.mov.date), buyLbl(s.mov), s.n > 1 ? s.k + " de " + s.n : "-", s.usd ? "" : pm(s.amt), s.usd ? pm(s.usd, "USD") : ""));
     (p.reints || []).forEach(x => line("", "Reintegro" + (x.note ? ": " + x.note : ""), "", pm(-x.amount), ""));
     if (Math.abs(p.cArs) > 0.004 || Math.abs(p.cUsd) > 0.004) line("", "Impuestos y cargos del resumen", "", p.cArs ? pm(p.cArs) : "", p.cUsd ? pm(p.cUsd, "USD") : "");
     if (!p.items.length && !p.re && !p.cArs && !p.cUsd) line("", "Sin gastos este mes", "", "", "");
@@ -1763,7 +1819,7 @@ document.addEventListener("click", e => {
     case "quick": quickForm(); break;
     case "editQuick": { const q = quickList().find(x => x.id === id); if (q) quickForm(q); break; }
     case "passQuick": passQuickForm(); break;
-    case "editMov": { const it = findMov(id); if (it) movForm(it); break; }
+    case "editMov": { const it = findMov(id); if (it && it.cardPay) { const [cid, ym] = it.cardPay.split("|"); cardPayForm(cid, ym, it.id); } else if (it) movForm(it); break; }
     case "filt": S.filter[el.dataset.k] = el.dataset.v; render(); break;
     case "newCard": cardForm(); break;
     case "editCard": cardForm(card(id)); break;
@@ -1799,7 +1855,7 @@ document.addEventListener("click", e => {
     case "cardUsd": cardUsdForm(id); break;
     case "cardDates": cardDatesForm(id); break;
     case "cardBuy": cardBuy(id); break;
-    case "cardPay": cardPayForm(id); break;
+    case "cardPay": cardPayForm(id, S.month); break;
     case "reint": reintForm(id, el.dataset.rid); break;
     case "stmt": if ((S.cfg.stmts || {})[id + "|" + S.month]) stmtResult(id, S.month); else stmtForm(id); break;
     case "weekly": weeklyForm(); break;
