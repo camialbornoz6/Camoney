@@ -727,14 +727,14 @@ function vInicio() {
   for (const [id, b] of Object.entries(budFor(M).b)) { if (!S.cfg.cats.some(c => c.id === id)) continue; const sp = st.byCat[id] || 0; if (b > 0 && sp > b) alerts.push(`<div class="alert">⚠️ Te pasaste en ${esc(cat(id).n)} por ${money(sp - b)}</div>`); else if (b > 0 && sp > b * .8) alerts.push(`<div class="alert" style="background:#2E2410;color:#F2D58A">🟡 Usaste el ${Math.round(sp / b * 100)}% de ${esc(cat(id).n)}</div>`); }
   const pf = pendingFixed(M);
   if (pf.length) alerts.push(`<div class="alert info">📌 ${pf.length} gasto${pf.length > 1 ? "s" : ""} fijo${pf.length > 1 ? "s" : ""} sin registrar este mes<button data-act="goFixed">Ver</button></div>`);
-  if (st.owed > 0.004) alerts.push(`<div class="alert info">💳 Te deben ${money(st.owed)} de las tarjetas de ${mOnly(M)}<button data-tab="cards">Ver</button></div>`);
+  if (st.owed > 0.004) alerts.push(`<div class="alert info">💳 Te deben ${money(st.owed)} del resumen de ${rName(M)} (el que pagás en ${mOnly(M)})<button data-act="goCardsRes">Ver</button></div>`);
   if (st.noRate) alerts.push(`<div class="alert">💲 Tenés consumos en dólares en las tarjetas y falta la cotización<button data-act="usd">Cargar</button></div>`);
   const t = savTotals();
   const hasData = (S.months[M] || []).length || st.cards;
   /* resúmenes del mes que todavía no tienen el pago registrado en Gastos */
   let cardsLeft = 0; const unpaid = [];
   for (const c of S.cfg.cards) { const due = myCardPart(c.id, M), left = Math.max(0, due - cardPaid(c.id, M)); cardsLeft += left; if (due > 0.5 && !cardPays(c.id, M, "").length) unpaid.push(c.name); }
-  if (unpaid.length && M <= ymOf(todayStr())) alerts.push(`<div class="alert info">💳 Falta registrar el pago de ${esc(unpaid.join(" y "))}<button data-tab="cards">Ver</button></div>`);
+  if (unpaid.length && M <= ymOf(todayStr())) alerts.push(`<div class="alert info">💳 Falta registrar el pago del resumen de ${rName(M)} de ${esc(unpaid.join(" y "))}<button data-act="goCardsRes">Ver</button></div>`);
   return `
   <div class="qbar"><button class="qbtn" data-act="quick">⚡ Registro rápido de gasto</button></div>
   <div class="ibar"><button data-act="calendar">📅 Ver otros meses</button><button data-act="tab" data-v="analisis">📊 Análisis</button></div>
@@ -2055,6 +2055,8 @@ document.addEventListener("click", e => {
     case "weekly": weeklyForm(); break;
     case "people": peopleForm(); break;
     case "delPerson": { const ppl = (S.cfg.people || []).slice(); ppl.splice(Number(id), 1); S.cfg.people = ppl; persist("config"); peopleForm(); render(); break; }
+    /* desde Inicio: abre Tarjetas en el resumen que se paga este mes (el que cerró el mes anterior) */
+    case "goCardsRes": S.month = addM(S.month, -1); S.tab = "cards"; window.scrollTo(0, 0); render(); break;
     case "goMonth": S.month = id; S.tab = "inicio"; window.scrollTo(0, 0); render(); break;
   }
 });
