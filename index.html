@@ -344,7 +344,7 @@ function useLocal() {
   try { const d = JSON.parse(localStorage.getItem(LS) || "null"); if (d) { applyCfg(d.cfg); S.months = d.months || {}; for (const k in S.months) S.months[k] = cleanItems(S.months[k]); S.sav = cleanItems(d.sav); } } catch (e) {}
   if (!STANDALONE) banner("Modo local: los datos se guardan solo en este navegador.");
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
-  S.ready = true; render();
+  S.fresh = true; S.ready = true; render();
 }
 /* ---------- nube propia (Firebase) ----------
    Cuando la app se abre fuera de Claude (instalada en el celu o desde GitHub Pages) y FB tiene datos,
@@ -376,7 +376,7 @@ function listen(fromFb) {
       else if (d.id.startsWith("m-")) months[d.id.slice(2)] = cleanItems(data.items);
     }
     applyCfg(cfg); S.months = months; S.sav = sav;
-    if (!snap.metadata.fromCache) { clearTimeout(timer); banner(""); if (fromFb && first) { first = false; if (snap.empty) offerUpload(); } }
+    if (!snap.metadata.fromCache) { S.fresh = true; clearTimeout(timer); banner(""); if (fromFb && first) { first = false; if (snap.empty) offerUpload(); } }
     S.ready = true; render();
   }, err => {
     clearTimeout(timer);
@@ -472,6 +472,27 @@ function firstDue(c, date) {
 }
 /* mes del resumen donde cae la primera cuota: la fecha de compra, o lo que se indicó a mano ("va por la cuota 2") */
 const startOf = it => it.startYm || firstDue(card(String(it.method).slice(5)), it.date);
+/* ---------- compras mensuales en tarjeta (suscripciones) ----------
+   Siempre hay una copia en el resumen siguiente al que está abierto hoy, con el último importe.
+   Cada copia es una compra común: se puede editar el importe de ese mes o eliminarla. */
+const subItems = sub => allItems().filter(i => i.sub === sub && String(i.method).startsWith("card:"));
+function ensureSubs() {
+  const groups = {};
+  for (const it of allItems()) if (it.sub && it.type === "gasto" && String(it.method).startsWith("card:") && card(it.method.slice(5))) (groups[it.sub] = groups[it.sub] || []).push(it);
+  for (const k in groups) {
+    /* hasta el resumen siguiente al que está abierto hoy en esa tarjeta */
+    const c0 = card(groups[k][0].method.slice(5)), horizon = addM(firstDue(c0, todayStr()), 1);
+    let last = groups[k].sort((a, b) => startOf(a).localeCompare(startOf(b)) || a.date.localeCompare(b.date)).pop(), guard = 0;
+    while (last.mensual && startOf(last) < horizon && guard++ < 24) {
+      const ym = addM(ymOf(last.date), 1), [y, mo] = ym.split("-").map(Number), day = Math.min(Number(last.date.slice(8, 10)), new Date(y, mo, 0).getDate());
+      const {startYm, ...base} = last, nx = {...base, id: k + "-" + ym, ts: Date.now(), date: ym + "-" + pad(day), cuotas: 1};
+      if (startYm) nx.startYm = addM(startYm, 1);
+      if (startOf(nx) <= startOf(last)) nx.startYm = addM(startOf(last), 1);
+      if (allItems().some(i => i.id === nx.id)) break;
+      upsertMov(nx, null); last = nx;
+    }
+  }
+}
 function cardSchedule(ymT) {
   const out = [];
   for (const it of allItems()) {
@@ -526,7 +547,7 @@ const fxAgo = () => { if (!FX.at) return ""; const m = Math.round((Date.now() - 
 const fxName = t => t ? "dólar " + (FX_TYPES[t] || t) : "dólar a mano";
 const isUsd = it => it.cur === "USD";
 const KIND_LBL = {reint: "Reintegro", imp: "Impuesto"};
-const buyLbl = it => (KIND_LBL[it.kind] ? KIND_LBL[it.kind] + (it.note ? ": " : "") : "") + (it.note || (KIND_LBL[it.kind] ? "" : cat(it.cat).n));
+const buyLbl = it => (it.sub ? "🔁 " : "") + (KIND_LBL[it.kind] ? KIND_LBL[it.kind] + (it.note ? ": " : "") : "") + (it.note || (KIND_LBL[it.kind] ? "" : cat(it.cat).n));
 const paidKey = (cid, ym, who) => cid + "|" + ym + "|" + who;
 const isPaid = (cid, ym, who) => !!(S.cfg.paid || {})[paidKey(cid, ym, who)];
 function movArs(it) {
@@ -672,6 +693,8 @@ function render() {
   document.querySelectorAll("nav.tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === (S.tab === "hist" || S.tab === "deudas" ? "mas" : S.tab === "analisis" ? "inicio" : S.tab)));
   if (!S.ready) return;
   if (!fxStarted) { fxStarted = true; setTimeout(() => fetchFx(), 0); }
+  /* solo con los datos completos (no con la copia vieja del celu), así nunca se duplica */
+  if (S.fresh && render.subDone !== todayStr()) { render.subDone = todayStr(); ensureSubs(); }
   navTrap();
   const v = {inicio: vInicio, movs: vMovs, cards: vCards, sav: vSav, mas: vMas, hist: vHist, deudas: vDeudas, analisis: vAnalisis}[S.tab]();
   $("#view").innerHTML = v;
@@ -1104,7 +1127,7 @@ function methodOptions(type, cur, cardMode) {
   return BASE_METHODS.map(m => radio("method", m.id, m.i + " " + m.n, cur)).join("");
 }
 /* compra con tarjeta: se carga desde Tarjetas y no se mezcla con los gastos del mes */
-function cardBuy(cid) { if (!S.cfg.cards.length) { cardForm(); return; } movForm({type: "gasto", amount: "", date: defDate(), cat: "", method: "card:" + (cid || S.cfg.cards[0].id), cuotas: 1, note: "", _new: true}, null, "card"); }
+function cardBuy(cid) { if (!S.cfg.cards.length) { cardForm(); return; } movForm({type: "gasto", amount: "", date: defDate(), cat: "", method: "card:" + (cid || S.cfg.cards[0].id), cuotas: 1, note: "", _new: true, _lockCard: !!cid}, null, "card"); }
 /* pago del resumen: cuánto, cuándo, en qué moneda y de quién era la plata (vos pagás, pero puede ser la parte de otro) */
 function cardPayForm(cid, M, pid) {
   const c = card(cid); if (!c) return; M = M || S.month;
@@ -1146,18 +1169,21 @@ function movForm(it, onDone, mode) {
   const m = it ? (({_new, ...r}) => r)(it) : {type: "gasto", amount: "", date: defDate(), cat: "", method: "efectivo", cuotas: 1, note: ""};
   if (!CM && String(m.method).startsWith("card:")) m.method = "efectivo";
   const K0 = m.kind || "compra";
-  openSheet(`<h2>${CM ? (isNew ? "Cargar en la tarjeta" : "Editar " + (KIND_LBL[K0] || "compra").toLowerCase()) : isNew ? "Nuevo movimiento" : "Editar movimiento"}</h2>
+  /* en Tarjetas la tarjeta ya viene elegida (botón de cada tarjeta, edición o una sola tarjeta): no se vuelve a preguntar */
+  const lockCard = CM && (!!m._lockCard || !isNew || S.cfg.cards.length === 1), cardNm = (card(String(m.method).slice(5)) || {}).name || "la tarjeta";
+  openSheet(`<h2>${CM ? (isNew ? "Cargar en " + esc(cardNm) : "Editar " + (KIND_LBL[K0] || "compra").toLowerCase()) : isNew ? "Nuevo movimiento" : "Editar movimiento"}</h2>
   <form id="f" autocomplete="off">
     ${CM ? `<div class="seg">${radio("kind", "compra", "Compra", K0)}${radio("kind", "reint", "Reintegro", K0)}${radio("kind", "imp", "Impuesto", K0)}</div><div class="note" id="kindNote" style="margin:-4px 0 8px"></div>` : ""}
     <div class="seg${CM ? " hidden" : ""}">${radio("type", "gasto", "Gasto", m.type)}${radio("type", "ingreso", "Ingreso", m.type)}</div>
     <div class="bigin"><span id="curSym">$</span><input name="amount" inputmode="decimal" placeholder="0" value="${m.amount !== "" ? numIn(m.amount) : ""}"></div>
     <label class="fld" style="margin-top:0"><span>Descripción (opcional)</span><input name="note" value="${esc(m.note || "")}" maxlength="80" placeholder="Ej: compra en el chino, heladera…"></label>
-    <label class="fld" id="catBox"><span>Categoría${CM ? " (opcional)" : ""}</span><select name="cat" id="catSel"></select></label>
+    <label class="fld${CM ? " hidden" : ""}" id="catBox"><span>Categoría</span><select name="cat" id="catSel"></select></label>
     <div class="hint hidden" id="budInfo"></div>
-    <div class="lab">${CM ? "Tarjeta" : "Medio de pago"}</div><div class="chips" id="metChips"></div>
+    <div class="lab${lockCard ? " hidden" : ""}">${CM ? "Tarjeta" : "Medio de pago"}</div><div class="chips${lockCard ? " hidden" : ""}" id="metChips"></div>
     <div id="cuotasBox" class="hidden">
       <div class="lab">Moneda</div><div class="seg" style="margin-bottom:0">${radio("cur", "ARS", "Pesos", m.cur || "ARS")}${radio("cur", "USD", "Dólares", m.cur || "ARS")}</div>
       <label class="fld" id="resBox"><span>¿En qué resumen va?</span><select name="resYm">${[-1, 0, 1, 2].map(j => { const y = addM(S.month, j); return `<option value="${y}" ${(m.startYm || S.month) === y ? "selected" : ""}>${mName(y)}</option>`; }).join("")}</select></label>
+      <label class="chk${CM ? "" : " hidden"}" id="mensChk" style="margin-top:4px"><input type="checkbox" name="mensual" ${m.mensual ? "checked" : ""}> <span>Es una compra mensual <small style="color:var(--mute);font-weight:500;display:block">Suscripciones, streaming, etc.: se carga sola en el resumen de cada mes y podés cambiarle el importe cuando quieras</small></span></label>
       <label class="fld" id="cuoBox"><span>Cuotas</span><select name="cuotas">${[...Array.from({length: 24}, (_, i) => i + 1), 30, 36].map(n => `<option value="${n}" ${n === (m.cuotas || 1) ? "selected" : ""}>${n === 1 ? "1 pago" : n + " cuotas"}</option>`).join("")}</select></label>
       <label class="fld hidden" id="kBox"><span id="kLbl"></span><select name="kNow"></select></label>
       <div class="hint" id="cuotaInfo"></div>
@@ -1189,7 +1215,7 @@ function movForm(it, onDone, mode) {
   /* "¿qué cuota cae en el resumen del mes que estás mirando?": por defecto sale de la fecha de compra */
   let kInit = true;
   const drawK = () => { const box = $("#kBox"), sel = f.elements.kNow, c = selCard(), n = Number(val(f, "cuotas")) || 1, date = val(f, "date");
-    if (!c || n < 2 || kindOf() !== "compra" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) { box.classList.add("hidden"); return; }
+    if (!c || n < 2 || kindOf() !== "compra" || (f.elements.mensual && f.elements.mensual.checked) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) { box.classList.add("hidden"); return; }
     box.classList.remove("hidden"); const ref = S.month, fd = firstDue(c, date), auto = diffM(fd, ref) + 1;
     let cur = sel.options.length ? sel.value : "";
     let keep = "";
@@ -1211,10 +1237,12 @@ function movForm(it, onDone, mode) {
     const sw = /^\d{4}-\d{2}-\d{2}$/.test(val(f, "date")) ? splitWeeks(val(f, "date")) : [];
     const canSplit = isNew && !isInc && isWeekCat(val(f, "cat")) && !String(val(f, "method")).startsWith("card:") && sw.length > 1;
     $("#splitChk").classList.toggle("hidden", !canSplit);
-    if (canSplit) { const a = parseAmt(val(f, "amount")); $("#splitInfo").textContent = "· " + sw.length + " semanas (" + sw.map(k => k).join(", ") + ")" + (a > 0 ? ": " + money(a / sw.length) + " c/u" : ""); } const isCard = String(val(f, "method")).startsWith("card:"); $("#cuotasBox").classList.toggle("hidden", !isCard); const usd = isCard && val(f, "cur") === "USD"; $("#curSym").textContent = usd ? "US$" : "$"; $("#newWhoBox").classList.toggle("hidden", val(f, "who") !== "__new"); const n = Number(val(f, "cuotas")) || 1, a = parseAmt(val(f, "amount")); let info = ""; if (isCard) { const c = card(val(f, "method").slice(5)); if (n > 1 && a > 0) info = n + " cuotas de " + money(a / n, usd ? "USD" : "ARS") + ". "; if (c && /^\d{4}-\d{2}-\d{2}$/.test(val(f, "date"))) { const st = startFromForm() || firstDue(c, val(f, "date")); info += n > 1 ? "La 1ª cae en el resumen de " + mOnly(st) + " y la última en el de " + mOnly(addM(st, n - 1)) + "." : "Cae en el resumen de " + mOnly(st) + "."; if (usd && a > 0) { const r = cardRate(c.id, st); info += r ? " ≈ " + money(a / n * r) + (n > 1 ? " por cuota" : "") + " (" + fxName(S.cfg.cardFx || S.cfg.usdSrc) + " a " + money(r) + ")." : " Falta la cotización del dólar."; } } } $("#cuotaInfo").textContent = info; if (CM) { ["exChk", "splitChk", "budChk"].forEach(id => $("#" + id).classList.add("hidden")); applyKind(); } budHint(); };
+    if (canSplit) { const a = parseAmt(val(f, "amount")); $("#splitInfo").textContent = "· " + sw.length + " semanas (" + sw.map(k => k).join(", ") + ")" + (a > 0 ? ": " + money(a / sw.length) + " c/u" : ""); } const isCard = String(val(f, "method")).startsWith("card:"); $("#cuotasBox").classList.toggle("hidden", !isCard); const usd = isCard && val(f, "cur") === "USD"; $("#curSym").textContent = usd ? "US$" : "$"; $("#newWhoBox").classList.toggle("hidden", val(f, "who") !== "__new"); const n = Number(val(f, "cuotas")) || 1, a = parseAmt(val(f, "amount")); let info = ""; if (isCard) { const c = card(val(f, "method").slice(5)); if (n > 1 && a > 0) info = n + " cuotas de " + money(a / n, usd ? "USD" : "ARS") + ". "; if (c && /^\d{4}-\d{2}-\d{2}$/.test(val(f, "date"))) { const st = startFromForm() || firstDue(c, val(f, "date")); info += n > 1 ? "La 1ª cae en el resumen de " + mOnly(st) + " y la última en el de " + mOnly(addM(st, n - 1)) + "." : "Cae en el resumen de " + mOnly(st) + (CM && f.elements.mensual.checked && kindOf() === "compra" ? " y se vuelve a cargar sola cada mes." : "."); if (usd && a > 0) { const r = cardRate(c.id, st); info += r ? " ≈ " + money(a / n * r) + (n > 1 ? " por cuota" : "") + " (" + fxName(S.cfg.cardFx || S.cfg.usdSrc) + " a " + money(r) + ")." : " Falta la cotización del dólar."; } } } $("#cuotaInfo").textContent = info; if (CM) { ["exChk", "splitChk", "budChk"].forEach(id => $("#" + id).classList.add("hidden")); applyKind(); } budHint(); };
   /* reintegro: resta en el resumen elegido; impuesto: suma. Los dos se le cargan a quien elijas */
   const applyKind = () => { const k = kindOf(), plain = k === "compra";
-    $("#cuoBox").classList.toggle("hidden", !plain); $("#resBox").classList.toggle("hidden", plain); $("#catBox").classList.toggle("hidden", !plain);
+    const mens = plain && f.elements.mensual.checked;
+    $("#mensChk").classList.toggle("hidden", !plain); $("#cuoBox").classList.toggle("hidden", !plain || mens); $("#resBox").classList.toggle("hidden", plain);
+    if (mens) { $("#kBox").classList.add("hidden"); if (f.elements.cuotas.value !== "1") { f.elements.cuotas.value = "1"; drawK(); } }
     $("#dateLbl").textContent = plain ? "Fecha de compra" : "Fecha";
     $("#whoLbl").textContent = plain ? "¿Quién hizo la compra?" : k === "reint" ? "¿De quién es el reintegro?" : "¿A quién se lo cargo?";
     f.elements.note.placeholder = plain ? "Ej: compra en el chino, heladera…" : k === "reint" ? "Ej: 20% en Coto, cashback…" : "Ej: IVA, sellos, percepción…";
@@ -1240,7 +1268,7 @@ function movForm(it, onDone, mode) {
     if (e.target.name === "type") { drawCats(); drawMet(); return; }
     if (e.target.name === "date") drawCats();
     if (e.target.name === "method") drawWho();
-    if (["method", "cuotas", "date", "kind"].includes(e.target.name)) drawK();
+    if (["method", "cuotas", "date", "kind", "mensual"].includes(e.target.name)) drawK();
     if (e.target.name === "inBud" && !e.target.checked) { const id = extraCatId(true); drawCats(); $("#catSel").value = id; }
     upd(); });
   f.elements.amount.addEventListener("input", upd);
@@ -1257,6 +1285,15 @@ function movForm(it, onDone, mode) {
     if (m.fixedId) nm.fixedId = m.fixedId;
     if (m.cardPay && !CM) nm.cardPay = m.cardPay;
     if (CM && kindOf() !== "compra") { nm.kind = kindOf(); nm.cuotas = 1; }
+    /* compra mensual: todas las copias de cada mes comparten "sub"; la última con "mensual" genera la del mes siguiente */
+    let subStop = false, subOld = 0;
+    if (CM && kindOf() === "compra") {
+      const mens = f.elements.mensual.checked;
+      if (mens || m.sub) nm.sub = m.sub || nm.id;
+      if (mens) { nm.mensual = true; nm.cuotas = 1; }
+      else if (m.mensual) subStop = true;
+      if (m.mensual && mens && m.amount !== amount) subOld = m.amount;
+    }
     if (m.paidKey) nm.paidKey = m.paidKey;
     if (nm.type === "ingreso" && !f.elements.inBud.checked) { nm.noBud = true; nm.cat = extraCatId(true); }
     if (nm.type === "gasto" && f.elements.fromExtra.checked && !CM) nm.fromExtra = true;
@@ -1279,8 +1316,16 @@ function movForm(it, onDone, mode) {
       render(); if (onDone) onDone(); return;
     }
     upsertMov(nm, it && !it._new ? it : null);
+    if (nm.sub && !isNew) {
+      const st = startOf(nm), later = subItems(nm.sub).filter(x => x.id !== nm.id && startOf(x) > st);
+      /* la dio de baja: se borran las copias de los meses siguientes */
+      if (subStop) later.forEach(removeMov);
+      /* cambió el importe: los meses siguientes que no se tocaron pasan a tener el nuevo */
+      else if (subOld) later.filter(x => x.amount === subOld).forEach(x => upsertMov({...x, amount}, x));
+    }
+    if (nm.mensual) ensureSubs();
     closeSheet();
-    let msg = isNew ? "Listo, guardado" : "Cambios guardados";
+    let msg = isNew ? (nm.mensual ? "Listo, se va a cargar sola todos los meses" : "Listo, guardado") : subStop ? "Listo, no se carga más en los meses siguientes" : "Cambios guardados";
     if (nm.type === "gasto" && nm.fromExtra) { const l = extraLeft(); msg += l >= 0 ? ` · te quedan ${money(l)} de ingresos extra` : ` · te pasaste ${money(-l)} de tus ingresos extra`; }
     else if (nm.type === "gasto" && !nm.who && !nm.cur && !CM) { const ym = budMonthOf(nm.method, nm.date, nm.startYm), bud = Number(budFor(ym).b[nm.cat]) || 0; if (bud > 0) { const left = bud - (stats(ym).byCat[nm.cat] || 0); msg += left >= 0 ? ` · te quedan ${money(left)} en ${cat(nm.cat).n}` : ` · te pasaste ${money(-left)} en ${cat(nm.cat).n}`; } }
     toast(msg);
@@ -1288,7 +1333,11 @@ function movForm(it, onDone, mode) {
     render();
     if (onDone) onDone();
   };
-  if (!isNew) twoTap($("#delBtn"), () => { removeMov(it); closeSheet(); toast("Movimiento eliminado"); render(); });
+  if (!isNew) twoTap($("#delBtn"), () => { removeMov(it);
+    let msg = "Movimiento eliminado";
+    if (it.sub) { const st = startOf(it), rest = subItems(it.sub), later = rest.filter(x => startOf(x) > st), prev = rest.filter(x => startOf(x) < st).sort((a, b) => startOf(b).localeCompare(startOf(a)))[0];
+      if (!later.length && prev && prev.mensual) { upsertMov({...prev, mensual: false}, prev); msg = "Eliminada · ya no se carga en los meses siguientes"; } }
+    closeSheet(); toast(msg); render(); });
 }
 /* ---------- registro rápido ----------
    Gastos anotados al vuelo (fecha de hoy, importe, detalle y categoría). Quedan pendientes
