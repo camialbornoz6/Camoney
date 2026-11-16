@@ -553,7 +553,7 @@ function weeklyData(ym) {
   const cats = (S.cfg.weekly && S.cfg.weekly.cats) || [];
   const r = weekRanges(ym).map(([a, b]) => ({a, b, sp: 0}));
   for (const it of S.months[ym] || []) {
-    if (it.type !== "gasto" || String(it.method).startsWith("card:") || !cats.includes(it.cat)) continue;
+    if (it.type !== "gasto" || String(it.method).startsWith("card:") || it.cardPay || !cats.includes(it.cat)) continue;
     r[Math.min(3, Math.floor((Number(it.date.slice(8, 10)) - 1) / 7))].sp += it.amount;
   }
   return r;
@@ -588,8 +588,8 @@ function stats(ym) {
   let ing = 0, ingBud = 0, direct = 0; const byMethod = {efectivo: 0, debito: 0, mp: 0, tarjetas: 0}, byCat = {}, byCatAll = {}; let fromExtra = 0;
   for (const it of items) {
     if (it.type === "ingreso") { ing += it.amount; if (!it.noBud) ingBud += it.amount; continue; }
-    if (String(it.method).startsWith("card:") || (it.cardPay && it.who)) continue;
-    const a = it.cardPay ? payArs(it) : it.amount;
+    if (String(it.method).startsWith("card:") || it.cardPay) continue;
+    const a = it.amount;
     direct += a; byMethod[it.method] = (byMethod[it.method] || 0) + a; byCatAll[it.cat] = (byCatAll[it.cat] || 0) + a;
     if (it.fromExtra) fromExtra += a; else byCat[it.cat] = (byCat[it.cat] || 0) + a;
   }
@@ -601,7 +601,7 @@ function stats(ym) {
   }
   for (const c of S.cfg.cards) { const own = reintTot(c.id, ym, ""); cards -= own; others -= reintTot(c.id, ym) - own; }
   const owed = owedBy(sched).reduce((t, p) => t + p.pend, 0);
-  byMethod.tarjetas = items.filter(it => it.type === "gasto" && !String(it.method).startsWith("card:") && !(it.cardPay && it.who) && (it.cardPay || it.cat === "pagotj")).reduce((t, it) => t + (it.cardPay ? payArs(it) : it.amount), 0);
+  byMethod.tarjetas = items.filter(it => it.type === "gasto" && !String(it.method).startsWith("card:") && !it.cardPay && it.cat === "pagotj").reduce((t, it) => t + it.amount, 0);
   let ahorro = 0;
   for (const s of S.sav) {
     if (ymOf(s.date) !== ym) continue;
@@ -761,7 +761,7 @@ function itemRow(it) {
 }
 function vMovs() {
   const f = S.filter; if (f.method === "card") f.method = "all";
-  let items = (S.months[S.month] || []).filter(i => !String(i.method).startsWith("card:") && !(i.cardPay && i.who));
+  let items = (S.months[S.month] || []).filter(i => !String(i.method).startsWith("card:") && !i.cardPay);
   if (f.type !== "all") items = items.filter(i => i.type === f.type);
   if (f.method !== "all") items = items.filter(i => f.method === "card" ? String(i.method).startsWith("card:") : i.method === f.method);
   if (f.q) { const q = f.q.toLowerCase(); items = items.filter(i => (i.note || "").toLowerCase().includes(q) || cat(i.cat).n.toLowerCase().includes(q) || (i.who || "").toLowerCase().includes(q)); }
@@ -1039,24 +1039,23 @@ function cardPayForm(cid, M, pid) {
   const t = todayStr(), m = pm || {amount: sug("", "ARS"), cur: "ARS", who: "", method: "debito", date: ymOf(t) >= M ? t : vencDateOf(c, M)};
   const shareRows = ["", ...users].filter(w => sh[w] && (Math.abs(sh[w].ars) > 0.5 || Math.abs(sh[w].usd) > 0.004)).map(w => { const o = sh[w], pa = pays.filter(x => (x.who || "") === w);
     return `<div class="fix"><div class="ico">${w ? "👤" : "🙋"}</div><div class="mid"><b>${esc(w || "Yo")}</b><small>${pa.length ? "Pagó " + pa.map(x => money(x.amount, x.cur || "ARS")).join(" + ") : "Sin pagos"}</small></div><div style="text-align:right"><b>${money(o.ars)}</b>${Math.abs(o.usd) > 0.004 ? `<small style="display:block;color:var(--mute)">${money(o.usd, "USD")}</small>` : ""}</div></div>`; }).join("");
-  openSheet(`<h2>${isNew ? "Registrar pago" : "Editar pago"}</h2><div class="note">${esc(c.name)} · resumen de ${mName(M)}. Lo que pagás con tu plata cuenta como gasto del mes; si es plata que te dio otra persona para su parte, elegila en “¿De quién es la plata?”.</div>
+  openSheet(`<h2>${isNew ? "Registrar pago" : "Editar pago"}</h2><div class="note">${esc(c.name)} · resumen de ${mName(M)}. Es solo para registrar qué se pagó y de quién era la plata: no se anota como gasto ni aparece en Movimientos.</div>
     <div class="lab">Lo que le toca a cada uno</div>${shareRows || `<div class="empty">No hay compras cargadas en este resumen.</div>`}
     <form id="f" autocomplete="off">
     <div class="lab">Moneda</div><div class="seg" style="margin-bottom:0">${radio("cur", "ARS", "Pesos", m.cur || "ARS")}${radio("cur", "USD", "Dólares", m.cur || "ARS")}</div>
     <div class="bigin"><span id="paySym">${m.cur === "USD" ? "US$" : "$"}</span><input name="amount" inputmode="decimal" placeholder="0" value="${m.amount ? numIn(m.amount) : ""}"></div>
     <label class="fld" style="margin-top:0"><span>¿De quién es la plata?</span><select name="who"><option value="">🙋 Mía</option>${users.map(u => `<option value="${esc(u)}" ${m.who === u ? "selected" : ""}>${esc(u)}</option>`).join("")}</select></label>
-    <div id="payMet"><div class="lab">¿Con qué pagaste?</div><div class="chips">${BASE_METHODS.map(x => radio("method", x.id, x.i + " " + x.n, m.method || "debito")).join("")}</div></div>
     <label class="fld"><span>Fecha del pago</span><input type="date" name="date" value="${esc(m.date)}" required></label>
     <button class="btn primary">Guardar pago</button>${isNew ? "" : `<button type="button" class="btn danger" id="delBtn">Eliminar pago</button>`}</form>
     ${pays.filter(x => x.id !== pid).length ? `<div class="lab">Pagos ya registrados</div>` + pays.filter(x => x.id !== pid).map(x => `<button class="item" data-act="editMov" data-id="${esc(x.id)}"><div class="ico">💳</div><div class="mid"><b>${esc(x.who || "Yo")}</b><small>${fmtD(x.date)}</small></div><div class="amt out">${money(x.amount, x.cur || "ARS")}</div></button>`).join("") : ""}`);
   const f = $("#f"); let dirty = !isNew;
   f.elements.amount.addEventListener("input", () => { dirty = true; });
-  const upd = () => { const cur = val(f, "cur"), who = val(f, "who"); $("#paySym").textContent = cur === "USD" ? "US$" : "$"; $("#payMet").classList.toggle("hidden", !!who); if (!dirty) { const v = sug(who, cur); f.elements.amount.value = v ? numIn(v) : ""; } };
+  const upd = () => { const cur = val(f, "cur"), who = val(f, "who"); $("#paySym").textContent = cur === "USD" ? "US$" : "$"; if (!dirty) { const v = sug(who, cur); f.elements.amount.value = v ? numIn(v) : ""; } };
   f.addEventListener("change", e => { if (e.target.name === "cur" || e.target.name === "who") upd(); }); upd();
   f.onsubmit = e => { e.preventDefault(); const amount = parseAmt(val(f, "amount")), date = val(f, "date"), who = val(f, "who"), cur = val(f, "cur");
     if (!(amount > 0)) { toast("Poné cuánto se pagó"); return; } if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { toast("Revisá la fecha"); return; }
     const pc = S.cfg.cats.find(x => x.id === "pagotj") || S.cfg.cats.find(x => x.t === "gasto");
-    const nm = {id: pm ? pm.id : gid(), ts: pm ? pm.ts : Date.now(), type: "gasto", amount, date, cat: pc ? pc.id : "otros", method: who ? "debito" : val(f, "method") || "debito", cuotas: 1, note: "Pago " + c.name + " · " + mOnly(M) + (who ? " (de " + who + ")" : ""), cardPay: key};
+    const nm = {id: pm ? pm.id : gid(), ts: pm ? pm.ts : Date.now(), type: "gasto", amount, date, cat: pc ? pc.id : "otros", method: "debito", cuotas: 1, note: "Pago " + c.name + " · " + mOnly(M) + (who ? " (de " + who + ")" : ""), cardPay: key};
     if (cur === "USD") nm.cur = "USD"; if (who) nm.who = who;
     upsertMov(nm, pm || null);
     /* si la persona ya cubrió su parte, queda tildada como "pagó" */
@@ -1747,7 +1746,7 @@ function peopleForm() {
 }
 function csv(rows) { return "﻿" + rows.map(r => r.map(v => { v = String(v ?? ""); return /[;"\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(";")).join("\r\n"); }
 function exportData(scope) {
-  let items = scope === "all" ? allItems() : (S.months[S.month] || []);
+  let items = (scope === "all" ? allItems() : (S.months[S.month] || [])).filter(i => !i.cardPay);
   items = items.slice().sort((a, b) => a.date.localeCompare(b.date));
   const rows = [["Fecha", "Tipo", "Categoría", "Medio de pago", "Cuotas", "Monto", "Moneda", "De quién", "Nota"]];
   for (const i of items) rows.push([i.date.split("-").reverse().join("/"), i.type === "gasto" ? "Gasto" : "Ingreso", cat(i.cat).n, methodLabel(i.method), i.cuotas || 1, String(i.amount).replace(".", ","), isUsd(i) ? "USD" : "ARS", i.who || "Yo", i.note || ""]);
